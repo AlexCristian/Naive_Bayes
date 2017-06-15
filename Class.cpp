@@ -15,8 +15,10 @@ Class<T>::Class(string id_, int kmer_size, path _savefile)  {
   sumfreq_lg = make_pair(0, false);
 
   ngenomes=0;
+
   sumfreq=1;
   sumfreq<<=2*kmer_size;
+
   id = id_;
 
   savefile = _savefile;
@@ -269,6 +271,11 @@ void Class<T>::unload(){
   delete freqcnt_lg;
 
   isLoaded = false;
+}
+
+template <class T>
+bool Class<T>::loaded(){
+  return isLoaded;
 }
 
 template <class T>

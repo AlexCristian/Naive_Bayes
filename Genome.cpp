@@ -34,11 +34,16 @@ void Genome::loadSequence(){
 
 void Genome::loadKmerCounts(){
   if(!loadKmersLock.try_lock()){
+    /*
+     * Another thread is trying to load this at the same time,
+     * wait for it to finish and then return.
+     */
     loadKmersLock.lock();
     loadKmersLock.unlock();
+
+    // Since we're here, another thread has already loaded this data. Return.
     return;
   }
-
   ifstream in(kmr_path.native());
 
   kmer_counts = new unordered_map<int, int>;
@@ -50,22 +55,25 @@ void Genome::loadKmerCounts(){
       kmer<<=2;
       switch(*it){
         case 'A':
+        case 'a':
           kmer+=0;
           break;
         case 'C':
+        case 'c':
           kmer+=1;
           break;
         case 'G':
+        case 'g':
           kmer+=2;
           break;
         case 'T':
+        case 't':
           kmer+=3;
           break;
       }
     }
     (*kmer_counts)[kmer]=kmer_count;
   }
-
   in.close();
   kmersLoaded = true;
   loadKmersLock.unlock();
@@ -95,28 +103,30 @@ string& Genome::getSequence(){
 }
 
 void Genome::computeClassificationNumerator(Class<int>* cl){
-
-  double current = cl->getNGenomes_lg();
-  long long int sum = 0; ostringstream strs;
+  accumulator_set<double, features<tag::sum_kahan> > current, sumfrq;
+  
+  current(cl->getNGenomes_lg());
+  ostringstream strs;
   if(NB::debug_flag == NB::Debug::LOG_ALL){
-    strs<<"("<<cl->getId()<<") - "<<current;
+    strs<<"("<<cl->getId()<<"): "<<sum_kahan(current);
   }
 
   for(unordered_map<int, int>::iterator freq = getKmerCounts().begin();
     freq != getKmerCounts().end(); freq++){
-      sum += freq->second;
-      current += freq->second * cl->getFreqCount_lg(freq->first);
+      sumfrq(freq->second);
+      current(freq->second * cl->getFreqCount_lg(freq->first));
       if(NB::debug_flag == NB::Debug::LOG_ALL){
         strs<<" + "<<freq->second<<" * "<<cl->getFreqCount_lg(freq->first);
       }
   }
-  current -= sum * cl->getSumFreq_lg();
+  current(-sum_kahan(sumfrq) * cl->getSumFreq_lg());
   if(NB::debug_flag == NB::Debug::LOG_ALL){
-    strs<<" - "<<sum<<" * "<<cl->getSumFreq_lg()<<" = "<<current<<"\n";
+    strs<<" - "<<sum_kahan(sumfrq)<<" * "<<cl->getSumFreq_lg()<<" = ";
+    strs<<sum_kahan(current)<<"\n";
   }
 
   numeratorAccess.lock();
-  numerator.push(make_pair(current, cl));
+  numerator.push(make_pair(sum_kahan(current), cl));
   if(NB::debug_flag == NB::Debug::LOG_ALL){
     cout<<strs.str();
   }
@@ -124,24 +134,24 @@ void Genome::computeClassificationNumerator(Class<int>* cl){
 }
 
 Genome::pqueue Genome::getConfidences(){
-  double denominator = 1, max;
-  string maxId = "-1";
+  accumulator_set<double, features<tag::sum_kahan> >  p_denominator(1);
+  double max, denominator;
 
   pqueue num_cpy = numerator;
 
   max = num_cpy.top().first;
-  vector<tuple> cache; cache.push_back(num_cpy.top());
+  vector<score> cache; cache.push_back(num_cpy.top());
   num_cpy.pop();
 
   while(!num_cpy.empty()){
-    denominator += exp(num_cpy.top().first - max);
+    p_denominator(exp(num_cpy.top().first - max));
     cache.push_back(num_cpy.top());
     num_cpy.pop();
   }
-  denominator = max + log(denominator);
+  denominator = max + log(sum_kahan(p_denominator));
 
   pqueue confidence;
-  for(vector<tuple>::iterator num=cache.begin();
+  for(vector<score>::iterator num=cache.begin();
     num != cache.end(); num++){
     double confidence_lg = num->first - denominator;
     confidence.push(make_pair(confidence_lg, num->second));

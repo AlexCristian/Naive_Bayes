@@ -22,13 +22,14 @@ const string KMER_EXTEN(".kmr");
 const string PROG_VER("NB v. 0.1.5a-dev.");
 const string DEF_SAVEDIR("./NB_save");
 
-void trainNB(NB &nb, path srcdir, string extension){
-  int count = 1;
+void trainNB(NB &nb, path srcdir, string extension, int nbatch,
+             int memoryLimit){
+  int count = 1, counter = 0, usedMemory = 0;
   vector<tuple<string, path, path> > result =
     Diskutil::getTrainingGenomePaths(srcdir, extension);
   string cls_s="-1"; Class<int> *current = NULL;
   for(vector<tuple<string, path, path> >::iterator iter = result.begin();
-      iter != result.end(); iter++){
+      iter != result.end(); iter++, counter++){
         if(cls_s.compare(get<0>(*iter)) != 0){
 
           cls_s = get<0>(*iter);
@@ -47,53 +48,113 @@ void trainNB(NB &nb, path srcdir, string extension){
           nb.addClassToUpdateQueue(current);
         }
 
+        // FASTA files not needed for training, so just add up the kmr file size
+        int genomeSize = Diskutil::getFileSize(get<1>(*iter));
+
+        if(memoryLimit != -1 && usedMemory + genomeSize > memoryLimit){
+          nb.processClassUpdates();
+          usedMemory = 0;
+        }
+
         Genome *genome = new Genome(get<1>(*iter), get<2>(*iter));
         current->queueGenome(genome);
+        usedMemory += genomeSize;
+
+        if(nbatch != -1 && counter % nbatch == 0){
+          nb.processClassUpdates();
+        }
       }
 
       nb.processClassUpdates();
 }
 
-void classifyNB(NB &nb, path srcdir, string extension, int nbatch){
-  vector<tuple<string, path, path> > result =
-    Diskutil::getTrainingGenomePaths(srcdir, extension);
-  vector<Genome*> reads;
-  int correct=0, counter=0;
-  for(vector<tuple<string, path, path> >::iterator iter =
-    result.begin(); iter != result.end(); iter++, counter++){
+int printClassifierResults(vector<Genome*> reads,
+                           vector<tuple<string, path, path> > result){
 
-    Genome *genome = new Genome(get<1>(*iter), get<2>(*iter));
-    reads.push_back(genome);
+  int correct=0, total = reads.size();
 
-    if(nbatch != -1 && counter % nbatch == 0){
-      nb.classify(reads);
-    }
-  }
-
-  nb.classify(reads);
-
-  int total = reads.size();
   for(int i=0; i < total; i++){
     Genome::pqueue queue = reads[i]->getConfidences();
     string pred_class = queue.top().second->getId();
 
     cout<<"Genome with class "<<get<0>(result[i]);
-    cout<<", predicted "<<pred_class<<'\n';
+    cout<<", predicted "<<pred_class<<", score "<<queue.top().first<<'\n';
+    cout.flush();
 
-    if(pred_class.compare(get<0>(result[i]))){
+    if(pred_class.compare(get<0>(result[i])) == 0){
       correct++;
     }
+
+    int position=1;
+    while(!queue.empty() && pred_class.compare(get<0>(result[i])) != 0){
+      queue.pop(); position++;
+      pred_class = queue.top().second->getId();
+    }
+
+    if(pred_class.compare(get<0>(result[i])) != 0){
+      cout<<"[ERROR] Actual class not in queue.\n";
+    }else{
+      cout<<"Actual class was on position "<<position<<", score "<<queue.top().first<<"\n";
+    }
   }
-  cout<<"Accuracy: "<<correct*1.0/total<<"\n";
 
   for(vector<Genome*>::iterator iter = reads.begin();
       iter != reads.end(); iter++){
         delete *iter;
   }
+
+  return correct;
+}
+
+void classifyNB(NB &nb, path srcdir, string extension, int nbatch,
+                int memoryLimit){
+  vector<tuple<string, path, path> > result =
+    Diskutil::getTrainingGenomePaths(srcdir, extension);
+  vector<Genome*> reads;
+  int correct=0, counter=0, usedMemory = 0, total = result.size();
+  for(vector<tuple<string, path, path> >::iterator iter =
+    result.begin(); iter != result.end(); iter++, counter++){
+
+    int genomeSize = Diskutil::getFileSize(get<1>(*iter));
+    genomeSize += Diskutil::getFileSize(get<2>(*iter));
+
+    if(memoryLimit != -1 && usedMemory + genomeSize > memoryLimit){
+      nb.classify(reads);
+      correct += printClassifierResults(reads, result);
+      usedMemory = 0;
+
+      iter = result.erase(result.begin(), result.begin() + reads.size());
+      reads.clear();
+    }
+
+    if(nbatch != -1 && counter != 0 && counter % nbatch == 0){
+      nb.classify(reads);
+      correct += printClassifierResults(reads, result);
+      usedMemory = 0;
+
+      iter = result.erase(result.begin(), result.begin() + reads.size());
+      reads.clear();
+    }
+
+    Genome *genome = new Genome(get<1>(*iter), get<2>(*iter));
+    reads.push_back(genome);
+    usedMemory += genomeSize;
+  }
+
+  nb.classify(reads);
+  correct += printClassifierResults(reads, result);
+  usedMemory = 0;
+
+  cout<<"Accuracy: "<<correct*1.0/total<<"\n";
+  cout<<"Total correct: "<<correct<<"\n";
+  cout<<"Total classified: "<<total<<"\n";
+  cout.flush();
 }
 
 int main(int argc, char* argv[]){
-  int nbatch, nthreads, kmersize; string kmer_ext, srcdir, mode, savedir;
+  int nbatch, nthreads, kmersize, memLimit;
+  string kmer_ext, srcdir, mode, savedir;
+
   p_opt::options_description generic("Generic options");
   generic.add_options()
     ("help,h", "Print help message")
@@ -110,6 +171,8 @@ int main(int argc, char* argv[]){
                   "Path to save folder")
     ("kmersize,k", p_opt::value<int>(&kmersize)->default_value(DEF_KMER_SIZE),
                    "Kmer size used in count files")
+    ("memlimit,m", p_opt::value<int>(&memLimit)->default_value(-1),
+                   "Cap memory use to a predefined value (KBs).")
     ("nthreads,t", p_opt::value<int>(&nthreads)->default_value(1),
                  "Number of threads to spawn, 1 by default")
     ("ext,e", p_opt::value<string>(&kmer_ext)->default_value(KMER_EXTEN),
@@ -154,17 +217,19 @@ all at once by default")
   if(mode.compare("train") == 0){
     cout<<"Train mode.\n";
 
-    trainNB(nb, path(srcdir), kmer_ext);
+    trainNB(nb, path(srcdir), kmer_ext, nbatch, memLimit);
+
+    cout<<"Training complete.\n";
 
   }else if(mode.compare("classify") == 0){
     cout<<"Classify mode.\n";
 
-    classifyNB(nb, path(srcdir), kmer_ext, nbatch);
+    classifyNB(nb, path(srcdir), kmer_ext, nbatch, memLimit);
 
   }else if(mode.compare("benchmark") == 0){
-    trainNB(nb, path(srcdir), kmer_ext);
+    trainNB(nb, path(srcdir), kmer_ext, nbatch, memLimit);
 
-    classifyNB(nb, path(srcdir+"_test"), kmer_ext, nbatch);
+    classifyNB(nb, path(srcdir+"_test"), kmer_ext, nbatch, memLimit);
   }else{
     cout<<usageMsg<<"\n"<<generic<<"\n"<<visible<<"\n";
     return 1;

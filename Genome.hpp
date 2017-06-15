@@ -14,8 +14,13 @@
 #include <unordered_map>
 #include <queue>
 #include <mutex>
+#include <boost/accumulators/accumulators.hpp>
+#include <boost/accumulators/statistics/sum_kahan.hpp>
+#include <boost/accumulators/statistics.hpp>
 #include "Diskutil.hpp"
 using namespace std;
+using namespace boost::accumulators;
+
 
 template <class T>
 class Class;
@@ -23,8 +28,8 @@ class Class;
 class Genome {
 private:
 public:
-  typedef pair<double, Class<int>*> tuple;
-  typedef priority_queue<tuple, vector<tuple>, less<tuple> > pqueue;
+  typedef pair<double, Class<int>* > score;
+  typedef priority_queue<score, vector<score>, less<score> > pqueue;
 
   /**
    * Instantiates a Genome instance.
@@ -32,9 +37,22 @@ public:
    * @param  sequence_path Path to file containing DNA sequence.
    */
   Genome(path kmr_path, path sequence_path);
+
   ~Genome();
 
+  /**
+   * Loads kmer counts from the file specified in the "kmr_path" instantiation
+   * parameter. When triggered by multiple threads (on the same object), will
+   * wait for the initial thread to finish loading data and then simply return
+   * to all threads waiting.
+   */
   void loadKmerCounts();
+
+  /**
+   * Reads FASTA sequence from disk using the file specified in the
+   * "sequence_path" instantiation parameter.
+   * NOT THREAD SAFE, at the moment.
+   */
   void loadSequence();
 
   /**
@@ -67,12 +85,29 @@ public:
    */
   string charAt(int pos);
 
+  /**
+   * Getter for the FASTA sequence path.
+   * @return     The path to the FASTA file.
+   */
   string& getSequence();
 
+  /**
+   * Obtains a priority queue populated with class-probability pairs.
+   * Classes most likely to hold the genome will be at the top of the queue.
+   * @return     For each class, the probability of this genome pertaining
+   *             to it.
+   */
   pqueue getConfidences();
 
+  /**
+   * @return     The length of the FASTA sequence associated to this genome.
+   */
   int size();
 
+  /**
+   * @return     A hashmap containing the counts (values) associated to each
+   *             kmer (key).
+   */
   unordered_map<int, int>& getKmerCounts();
 protected:
   bool kmersLoaded = false, sequenceLoaded = false;

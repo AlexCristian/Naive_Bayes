@@ -42,7 +42,9 @@ void NB::load(){
 void NB::save(){
   for(unordered_map<string, Class<int>* >::iterator iter = classes.begin();
       iter != classes.end(); iter++){
-        iter->second->save();
+        if(iter->second->loaded()){
+          iter->second->save();
+        }
       }
 }
 
@@ -74,7 +76,8 @@ void NB::processClassUpdates(){
   total = classesToProcess.size();
 
   if(NB::debug_flag == NB::Debug::LOG_SOME){
-    cout<<"Started training...\n";
+    cout<<"Started training on batch...\n";
+    cout.flush();
   }
 
   int c_nthreads = nthreads;
@@ -105,9 +108,11 @@ void NB::trainThreadController(){
     Class<int>* cl = classesToProcess.front();
     classesToProcess.pop();
 
-    if(NB::debug_flag == NB::Debug::LOG_SOME){
+    if(NB::debug_flag == NB::Debug::LOG_SOME
+       || NB::debug_flag == NB::Debug::LOG_ALL){
       cout<<"("<<progress++<<"/"<<total<<") Training genomes for class ";
       cout<<cl->getId()<<"\n";
+      cout.flush();
     }
     classQueueAccess.unlock();
 
@@ -134,6 +139,7 @@ void NB::classifyThreadController(vector<Genome*>& reads){
     if(NB::debug_flag == NB::Debug::LOG_SOME){
       cout<<"("<<progress++<<"/"<<total<<") Computing confidence for class ";
       cout<<cl->getId()<<"\n";
+      cout.flush();
     }
     classQueueAccess.unlock();
 
@@ -147,8 +153,10 @@ void NB::classify(vector<Genome*> reads){
   progress = 1;
   total = classes.size();
 
-  if(NB::debug_flag == NB::Debug::LOG_SOME){
+  if(NB::debug_flag == NB::Debug::LOG_SOME
+     || NB::debug_flag == NB::Debug::LOG_ALL){
     cout<<"Started classifying...\n";
+    cout.flush();
   }
 
   for(unordered_map<string, Class<int>* >::iterator iter = classes.begin();
@@ -169,6 +177,11 @@ void NB::classify(vector<Genome*> reads){
     workers[i]->join();
     delete workers[i];
   }
+
+  for(vector<Genome*>::iterator iter = reads.begin();
+    iter != reads.end(); iter++){
+      (*iter)->unload();
+    }
 }
 
 int NB::min(int a, int b, int c){

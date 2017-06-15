@@ -10,6 +10,7 @@
 
 const string Diskutil::SEQUENCE_FILE_EXT = ".fasta";
 const string Diskutil::SAVE_FILE_EXT = ".dat";
+const int BTOKB = 1024;
 
 vector<path> Diskutil::getItemsInDir(path parent){
   vector<path> result;
@@ -23,6 +24,10 @@ vector<path> Diskutil::getItemsInDir(path parent){
     result.push_back(iter->path());
   }
   return result;
+}
+
+int Diskutil::getFileSize(path file){
+  return file_size(file) / BTOKB;
 }
 
 bool Diskutil::isFolderValid(path dir){
@@ -67,7 +72,7 @@ vector<tuple<string, path, path> >
         }
 
         string seqFile = gen->native();
-        seqFile = seqFile.substr(0, seqFile.rfind(".")-1);
+        seqFile = seqFile.substr(0, seqFile.rfind("."));
         seqFile += SEQUENCE_FILE_EXT;
 
         result.push_back(make_tuple(cls_s, *gen, path(seqFile)));
