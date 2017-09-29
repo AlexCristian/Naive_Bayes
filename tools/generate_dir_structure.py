@@ -33,7 +33,7 @@ class GenMode(Enum):
     REGEN_FROM_POOL = 2
 
 mode = GenMode.GEN_FTP_LINKS
-if len(sys.argv) >= 3:
+if len(sys.argv) > 3:
     mode = GenMode.REGEN_FROM_POOL
 
 ORIGIN = "."
@@ -64,12 +64,16 @@ with open(ORIGIN + "/.tree_data/ids.txt") as node_ids, open(urls_file) as urls:
         url = url.strip()
         while tree[node_id][1] != depth and node_id != "1":
             node_id = tree[node_id][0]
-        RANDOM_ID = choice(FOLD_RANGE)
-        path = FOLD_BASENAME + str(RANDOM_ID) + "/" + node_id
+        
+        if mode is GenMode.REGEN_FROM_POOL:
+            RANDOM_ID = choice(FOLD_RANGE)
+            path = FOLD_BASENAME + str(RANDOM_ID) + "/" + node_id
+        elif mode is GenMode.GEN_FTP_LINKS:
+            path = ORIGIN + "/" + sys.argv[2] + "/" + node_id
         print(path)
         if not os.path.isdir(path):
             os.makedirs(path)
-        if mode == GenMode.GEN_FTP_LINKS:
+        if mode is GenMode.GEN_FTP_LINKS:
             with open(path + '/to_download.txt', 'a', encoding='utf-8') as file:
                 file.write(url + "\n")
         else:

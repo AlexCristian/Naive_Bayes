@@ -3,19 +3,19 @@
 if [ -z "$1" ]
   then
     echo "usage: ./genome_download.bash [taxonomic rank]
-    1 - Domain
-    2 - Kingdom
-    3 - Division
-    4 - Subdivision
-    5 - Class
-    6 - Subclass
-    7 - Superorder
-    8 - Order
-    9 - Suborder
-    10 - Family
-    11 - Subfamily
-    12 - Genus
-    13 - Species
+    domain
+    kingdom
+    division
+    subdivision
+    class
+    subclass
+    superorder
+    order
+    suborder
+    family
+    subfamily
+    genus
+    species
     "
     exit
   else
@@ -66,13 +66,13 @@ tar -zxf .tree_data/taxdump.tar.gz -C .tree_data nodes.dmp # Extract only what w
 # over two files.
 awk '{print $1}' .tree_data/nodes.dmp > .tree_data/child.txt
 awk '{print $3}' .tree_data/nodes.dmp > .tree_data/parent.txt
-  awk '{print $5}' .tree_data/nodes.dmp > .tree_data/class.txt
+awk '{print $5}' .tree_data/nodes.dmp > .tree_data/class.txt
 
 # Begin processing data into FTP links
 awk -F "\t" '$12=="Complete Genome" && $11=="latest"{print $6, $20}' .tree_data/assembly_summary.txt > .tree_data/ftpdirpaths # Preserves ID and starts printing FTP link
 
 # Output in the format "ID ftpLink"
-awk 'BEGIN{FS=OFS="/";filesuffix="genomic.gbff.gz"}{ftpdir=$0;asm=$10;file=asm"_"filesuffix;print ftpdir,file}' .tree_data/ftpdirpaths > .tree_data/ftpfilepaths
+awk 'BEGIN{FS=OFS="/";filesuffix="genomic.fna.gz"}{ftpdir=$0;asm=$10;file=asm"_"filesuffix;print ftpdir,file}' .tree_data/ftpdirpaths > .tree_data/ftpfilepaths
 awk '{print $1}' .tree_data/ftpfilepaths > .tree_data/ids.txt
 awk '{print $2}' .tree_data/ftpfilepaths > .tree_data/ftp_links.txt
 
@@ -87,7 +87,7 @@ echo "Download genome listings [COMPLETE]"
 echo "Constructing specified tree [IN PROGRESS]"
 
 chmod +x generate_dir_structure.py
-./generate_dir_structure.py $depth
+./generate_dir_structure.py $depth genomes
 
 clearLastLine
 echo "Constructing specified tree [COMPLETE]"
@@ -128,6 +128,6 @@ echo "Decompress genomes [COMPLETE]"
 clearLastLine
 echo "Download genomes [COMPLETE]"
 
-./gbfftofasta.bash genomes
+#./gbfftofasta.bash genomes
 
 echo "Download successful."
