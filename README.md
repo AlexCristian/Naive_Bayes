@@ -63,6 +63,11 @@ This option specifies a target directory in which to save or load training data,
 
 The default value is "./NB_save", which will direct the program to search for a folder named NB_save in its current directory.
 
+## Project dependencies
+This release requires the following dependencies to be available on the host machine:
+- Grinder (https://sourceforge.net/projects/biogrinder/), tested on v. 0.5.4
+- Jellyfish (http://www.genome.umd.edu/jellyfish.html), tested on v. 2.1.3
+
 ## Bug reports, feature requests
 Please post an issue on our repo.
 
