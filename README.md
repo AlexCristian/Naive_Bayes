@@ -112,6 +112,7 @@ nb-train.bash ~/genomes/ ~/ncbi_reads_noerr 3 15
 The program will print out the classification progress as well as the results in stdout.
 
 4. Experimental dataset (can be found in Proteus group folder):
+
 Train dataset - ready on Dec. 15th 2018 (`~/genomes` directory in the example above):
 ```
 /mnt/HA/groups/rosenGrp/zz374/INBC_latest/genomes
