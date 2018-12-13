@@ -75,14 +75,25 @@ Please post an issue on our repo.
 ...are welcome!
 
 ## Experiment Instruction (How to train and test the model):
-1. Compile the NB classifier on Proteus:
+1. Compile the NB classifier on Proteus (boost/openmpi/gcc is the dependency):
 ```
 #! /bin/bash
 
-module load intel/composerxe/2015.1.133
-module load proteus-openmpi/intel/2015/1.8.1-mlnx-ofed
-module load boost/openmpi/intel/2015/1.57.0
+module load boost/openmpi/gcc/64/1.57.0
 
 make
 ```
 2. Train NB classifier:
+change the variable `EXEC_ROOT` in nb-train.bash to the path to `NB.run` (the compiled NB classifier binary)
+```
+nb-train.bash [path-to-fold] [fold index] [total_num_of_folds] [K-mer size]
+
+```
+for example, let's assume we train NB classifier with 5-fold cross validation, the path to training data is `~/genomes/` and k-mer size is 15, then there will be 5 independent models. The command to train NB classifier and get the first model is:
+```
+nb-train.bash ~/genomes/ 1 5 15
+```
+Similarly, the third model out of five in 5-fold cross validation can be obtained by running:
+```
+nb-train.bash ~/genomes/ 3 5 15
+```
