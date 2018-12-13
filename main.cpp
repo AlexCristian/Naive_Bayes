@@ -17,7 +17,7 @@ namespace p_opt = boost::program_options;
 string usageMsg("./NB.run [mode: train/classify/benchmark] [source dir] [options]\n");
 const int CONF_THRESHOLD = 100000;
 const int DEF_KMER_SIZE = 6;
-const string GEN_SEQ_EXTEN(".fasta");
+const string GEN_SEQ_EXTEN(".fna");
 const string KMER_EXTEN(".kmr");
 const string PROG_VER("NB v. 0.1.5a-dev.");
 const string DEF_SAVEDIR("./NB_save");
@@ -30,6 +30,12 @@ void trainNB(NB &nb, path srcdir, string extension, int nbatch,
   string cls_s="-1"; Class<int> *current = NULL;
   for(vector<tuple<string, path, path> >::iterator iter = result.begin();
       iter != result.end(); iter++, counter++){
+        int savefileSize = 0;
+        bool loadedNewClass = false;
+        
+        // FASTA files not needed for training, so just add up the kmr file size
+        int genomeSize = Diskutil::getFileSize(get<1>(*iter));
+
         if(cls_s.compare(get<0>(*iter)) != 0){
 
           cls_s = get<0>(*iter);
@@ -45,19 +51,23 @@ void trainNB(NB &nb, path srcdir, string extension, int nbatch,
                                      save_file);
             nb.addClass(current);
           }
-          nb.addClassToUpdateQueue(current);
+
+          savefileSize = Diskutil::getFileSize(current->getSavefilePath());
+          loadedNewClass = true;
         }
 
-        // FASTA files not needed for training, so just add up the kmr file size
-        int genomeSize = Diskutil::getFileSize(get<1>(*iter));
-
-        if(memoryLimit != -1 && usedMemory + genomeSize > memoryLimit){
+        if(memoryLimit != -1 && usedMemory + genomeSize + savefileSize> memoryLimit){
           nb.processClassUpdates();
           usedMemory = 0;
+          cls_s = "-1"; // This will force the next iteration to add this savefile's size again
         }
 
         Genome *genome = new Genome(get<1>(*iter), get<2>(*iter));
         current->queueGenome(genome);
+        if(loadedNewClass){
+          nb.addClassToUpdateQueue(current);
+          usedMemory += savefileSize;
+        }
         usedMemory += genomeSize;
 
         if(nbatch != -1 && counter % nbatch == 0){
@@ -72,19 +82,22 @@ int printClassifierResults(vector<Genome*> reads,
                            vector<tuple<string, path, path> > result){
 
   int correct=0, total = reads.size();
-
+  
   for(int i=0; i < total; i++){
-    Genome::pqueue queue = reads[i]->getConfidences();
-    string pred_class = queue.top().second->getId();
+    //Genome::pqueue queue = reads[i]->getConfidences();
+    Genome::score score = reads[i]->getMaximum();
+    //string pred_class = queue.top().second->getId();
+    string pred_class = score.second->getId();
 
     cout<<"Genome with class "<<get<0>(result[i]);
-    cout<<", predicted "<<pred_class<<", score "<<queue.top().first<<'\n';
+    cout<<", predicted "<<pred_class<<'\n';//<<", score "<<queue.top().first<<'\n';
     cout.flush();
 
     if(pred_class.compare(get<0>(result[i])) == 0){
       correct++;
     }
 
+    /*
     int position=1;
     while(!queue.empty() && pred_class.compare(get<0>(result[i])) != 0){
       queue.pop(); position++;
@@ -96,6 +109,7 @@ int printClassifierResults(vector<Genome*> reads,
     }else{
       cout<<"Actual class was on position "<<position<<", score "<<queue.top().first<<"\n";
     }
+    */
   }
 
   for(vector<Genome*>::iterator iter = reads.begin();
@@ -140,7 +154,7 @@ void classifyNB(NB &nb, path srcdir, string extension, int nbatch,
     reads.push_back(genome);
     usedMemory += genomeSize;
   }
-
+  
   nb.classify(reads);
   correct += printClassifierResults(reads, result);
   usedMemory = 0;

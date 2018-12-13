@@ -109,6 +109,13 @@ public:
    *             kmer (key).
    */
   unordered_map<int, int>& getKmerCounts();
+
+  /**
+   * When the STORE_ALL_NUMERATORS flag is false, returns the highest ranked class.
+   */
+  score getMaximum();
+
+  static bool STORE_ALL_NUMERATORS;
 protected:
   bool kmersLoaded = false, sequenceLoaded = false;
   pqueue numerator;
@@ -120,6 +127,9 @@ protected:
                     long long int b,
                     long long int c,
                     long long int d);
+
+  double maximumNumerator;
+  Class<int>* maximumNumeratorClass = NULL;
 };
 
 #include "Class.hpp"

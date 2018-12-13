@@ -8,6 +8,8 @@
 
 #include "Genome.hpp"
 
+bool Genome::STORE_ALL_NUMERATORS = false;
+
 Genome::Genome(path _kmr_path, path _sequence_path){
   kmr_path = _kmr_path;
   sequence_path = _sequence_path;
@@ -18,6 +20,7 @@ Genome::~Genome(){
 }
 
 void Genome::loadSequence(){
+  // Remove this code, it never gets used & was never meant for production anyway
   ifstream in(sequence_path.native());
 
   sequence = new string;
@@ -126,11 +129,30 @@ void Genome::computeClassificationNumerator(Class<int>* cl){
   }
 
   numeratorAccess.lock();
-  numerator.push(make_pair(sum_kahan(current), cl));
-  if(NB::debug_flag == NB::Debug::LOG_ALL){
-    cout<<strs.str();
+
+  if(!Genome::STORE_ALL_NUMERATORS){
+    double candidateNumerator = sum_kahan(current);
+    if(maximumNumeratorClass == NULL
+      || maximumNumerator < candidateNumerator){
+        maximumNumerator = candidateNumerator;
+        maximumNumeratorClass = cl;
+      }
+  }else{
+    numerator.push(make_pair(sum_kahan(current), cl));
+    if(NB::debug_flag == NB::Debug::LOG_ALL){
+      cout<<strs.str();
+    }
   }
+
   numeratorAccess.unlock();
+}
+
+Genome::score Genome::getMaximum(){
+  numeratorAccess.lock();
+  Genome::score sc = make_pair(maximumNumerator, maximumNumeratorClass);
+  numeratorAccess.unlock();
+
+  return sc;
 }
 
 Genome::pqueue Genome::getConfidences(){
