@@ -73,3 +73,16 @@ Please post an issue on our repo.
 
 ## Contributions and pull requests
 ...are welcome!
+
+## Experiment Instruction (How to train and test the model):
+1. Compile the NB classifier on Proteus:
+```
+#! /bin/bash
+
+module load intel/composerxe/2015.1.133
+module load proteus-openmpi/intel/2015/1.8.1-mlnx-ofed
+module load boost/openmpi/intel/2015/1.57.0
+
+make
+```
+2. Train NB classifier:
