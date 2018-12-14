@@ -116,10 +116,14 @@ void NB::trainThreadController(){
     }
     classQueueAccess.unlock();
 
-    cl->load();
-    cl->addGenomesInQueue();
-    cl->save();
-    cl->unload();
+    if(cl->loaded()) {
+      cout<<"Attempted double-load for Class " << cl->getId()<<"\n";
+    } else {
+      cl->load();
+      cl->addGenomesInQueue();
+      cl->save();
+      cl->unload();
+    }
   }
 }
 

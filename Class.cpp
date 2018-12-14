@@ -125,6 +125,11 @@ void Class<T>::addFreqCount_lg(T feature_, double count_){
 }
 
 template <class T>
+path Class<T>::getSavefilePath(){
+  return savefile;
+}
+
+template <class T>
 double Class<T>::getNGenomes_lg(){
   if(!ngenomes_lg.second){
     vector<double> terms;

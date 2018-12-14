@@ -131,6 +131,12 @@ public:
     double getSumFreq_lg();
 
     /**
+     * Gets a path to the savefile of this class.
+     * @return Path to savefile.
+     */
+    path getSavefilePath();
+
+    /**
      * @return True if the class is ready for use (has been initialized /
      *         loaded from disk).
      */

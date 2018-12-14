@@ -27,6 +27,9 @@ vector<path> Diskutil::getItemsInDir(path parent){
 }
 
 int Diskutil::getFileSize(path file){
+  if(!exists(file)){
+    return 0;
+  }
   return file_size(file) / BTOKB;
 }
 

@@ -73,3 +73,52 @@ Please post an issue on our repo.
 
 ## Contributions and pull requests
 ...are welcome!
+
+## Experiment Instruction (How to train and test the model):
+1. Compile the NB classifier on Proteus (boost/openmpi/gcc is the dependency):
+```
+#! /bin/bash
+
+module load boost/openmpi/gcc/64/1.57.0
+
+make
+```
+2. Train NB classifier:
+change the variable `EXEC_ROOT` in nb-train.bash to the path to `NB.run` (the compiled NB classifier binary). Then run command:
+```
+nb-train.bash [path-to-data] [fold index] [total_num_of_folds] [K-mer size]
+```
+for example, let's assume we train NB classifier with 5-fold cross validation, the path to training data is `~/genomes/` (there are 5 directory in it, `fold1/` to `fold5`) and k-mer size is 15, then there will be 5 independent models. The command to train NB classifier and get the first model is:
+```
+nb-train.bash ~/genomes/ 1 5 15
+```
+Similarly, the third model out of five in 5-fold cross validation can be obtained by running:
+```
+nb-train.bash ~/genomes/ 3 5 15
+```
+3. Testing NB classifier:
+change the variable `EXEC_ROOT` in nb-classify.bash to the path to `NB.run` (the compiled NB classifier binary). Then run command:
+```
+nb-classify.bash [path-to-model] [path-to-testing_data] [fold index] [K-mer size]
+```
+for example, let's assume we have trained NB classifier based on the configurations we described above. Then the 5 trained models are stored in the same directory as your data (`~/genomes/`). Hence, the path to model is `~/genomes/` too and k-mer size is 15, then there will be 5 independent models (`save_1/` to `save_5`). The command to classify reads in testing dataset (path: `~/ncbi_reads_noerr`) using the first model is:
+```
+nb-train.bash ~/genomes/ ~/ncbi_reads_noerr 1 15
+```
+Similarly, classification results using the third model out of five in 5-fold cross validation can be obtained by running:
+```
+nb-train.bash ~/genomes/ ~/ncbi_reads_noerr 3 15
+```
+The program will print out the classification progress as well as the results in stdout.
+
+4. Experimental dataset (can be found in Proteus group folder):
+
+Train dataset - ready on Dec. 15th 2018 (`~/genomes` directory in the example above):
+```
+/mnt/HA/groups/rosenGrp/zz374/INBC_latest/genomes
+```
+Test dataset - ready on Dec. 15th 2018  (`~/ncbi_reads_noerr` directory in the example above):
+```
+/mnt/HA/groups/rosenGrp/zz374/INBC_latest/ncbi_reads_noerr
+```
+
