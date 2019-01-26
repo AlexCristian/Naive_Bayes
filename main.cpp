@@ -84,13 +84,26 @@ int printClassifierResults(vector<Genome*> reads,
   int correct=0, total = reads.size();
   
   for(int i=0; i < total; i++){
-    //Genome::pqueue queue = reads[i]->getConfidences();
-    Genome::score score = reads[i]->getMaximum();
-    //string pred_class = queue.top().second->getId();
-    string pred_class = score.second->getId();
+    string pred_class;
+    double posterior, prior;
+    if (Genome::STORE_ALL_NUMERATORS) {
+      Genome::pqueue queue = reads[i]->getConfidences();
+
+      pred_class = queue.top().second->getId();
+      posterior = queue.top().first;
+    } else {
+      Genome::score score = reads[i]->getMaximum();
+      
+      pred_class = score.second->getId();
+      prior = score.first;
+    }    
 
     cout<<"Genome with class "<<get<0>(result[i]);
-    cout<<", predicted "<<pred_class<<'\n';//<<", score "<<queue.top().first<<'\n';
+    cout<<", predicted "<<pred_class;
+    if (Genome::STORE_ALL_NUMERATORS) {
+      cout<<", posterior: "<<posterior;
+    }
+    cout<<'\n';
     cout.flush();
 
     if(pred_class.compare(get<0>(result[i])) == 0){
@@ -130,7 +143,6 @@ void classifyNB(NB &nb, path srcdir, string extension, int nbatch,
     result.begin(); iter != result.end(); iter++, counter++){
 
     int genomeSize = Diskutil::getFileSize(get<1>(*iter));
-    genomeSize += Diskutil::getFileSize(get<2>(*iter));
 
     if(memoryLimit != -1 && usedMemory + genomeSize > memoryLimit){
       nb.classify(reads);
@@ -168,6 +180,7 @@ void classifyNB(NB &nb, path srcdir, string extension, int nbatch,
 int main(int argc, char* argv[]){
   int nbatch, nthreads, kmersize, memLimit;
   string kmer_ext, srcdir, mode, savedir;
+  bool print_posterior;
 
   p_opt::options_description generic("Generic options");
   generic.add_options()
@@ -194,8 +207,11 @@ int main(int argc, char* argv[]){
     ("nbatch,n", p_opt::value<int>(&nbatch)->default_value(-1),
                "Number of genomes to load at one time in memory, \
 all at once by default")
+    ("p_posterior,pst", p_opt::value<bool>(&print_posterior)->default_value(Genome::STORE_ALL_NUMERATORS),
+               "Print posteriors for every classified read. This \
+flag increases the classifier's memory usage and is not compatible with the memory cap flag.")
   ;
-
+  
   p_opt::positional_options_description pos_args;
   pos_args.add("mode", 1);
   pos_args.add("srcdir", 1);
@@ -227,6 +243,7 @@ all at once by default")
   create_directories(savedir);
   NB nb(kmersize, path(savedir), nthreads);
   nb.debug_flag = NB::Debug::LOG_SOME;
+  Genome::STORE_ALL_NUMERATORS = print_posterior;
 
   if(mode.compare("train") == 0){
     cout<<"Train mode.\n";

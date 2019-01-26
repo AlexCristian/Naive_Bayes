@@ -26,6 +26,10 @@ Allowed options:
                                     default
   -n [ --nbatch ] arg (=-1)         Number of genomes to load at one time in
                                     memory, all at once by default
+  -p [ --p_posterior ] arg (=0)     Print posteriors for every classified read.
+                                    This flag increases the classifier's memory
+                                    usage and is not compatible with the memory
+                                    cap flag.
 ```
 
 ### -m : Using the --memlimit memory cap option
