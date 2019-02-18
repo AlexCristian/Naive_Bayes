@@ -10,6 +10,7 @@
 #include "Diskutil.hpp"
 #include <cstring>
 #include <cstdlib>
+#include <cstdint>
 #include <boost/program_options.hpp>
 using namespace std;
 namespace p_opt = boost::program_options;
@@ -23,8 +24,9 @@ const string PROG_VER("NB v. 0.1.5a-dev.");
 const string DEF_SAVEDIR("./NB_save");
 
 void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
-             unsigned int memoryLimit){
-  unsigned int count = 1, counter = 0, usedMemory = 0;
+             uint64_t memoryLimit){
+  unsigned int count = 1, counter = 0;
+  uint64_t usedMemory = 0;
   vector<tuple<string, path, path> > result =
     Diskutil::getTrainingGenomePaths(srcdir, extension);
   string cls_s="-1"; Class<int> *current = NULL;
@@ -134,11 +136,12 @@ int printClassifierResults(vector<Genome*> reads,
 }
 
 void classifyNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
-                unsigned int memoryLimit){
+                uint64_t memoryLimit){
   vector<tuple<string, path, path> > result =
     Diskutil::getTrainingGenomePaths(srcdir, extension);
   vector<Genome*> reads;
-  unsigned int correct=0, counter=0, usedMemory = 0, total = result.size();
+  unsigned int correct=0, counter=0, total = result.size();
+  uint64_t usedMemory = 0;
   for(vector<tuple<string, path, path> >::iterator iter =
     result.begin(); iter != result.end(); iter++, counter++){
 
@@ -178,7 +181,8 @@ void classifyNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
 }
 
 int main(int argc, char* argv[]){
-  unsigned int nbatch, nthreads, kmersize, memLimit;
+  unsigned int nbatch, nthreads, kmersize;
+  uint64_t memLimit;
   string kmer_ext, srcdir, mode, savedir;
   bool print_posterior;
 
@@ -198,7 +202,7 @@ int main(int argc, char* argv[]){
                   "Path to save folder")
     ("kmersize,k", p_opt::value<unsigned int>(&kmersize)->default_value(DEF_KMER_SIZE),
                    "Kmer size used in count files")
-    ("memlimit,m", p_opt::value<unsigned int>(&memLimit)->default_value(0),
+    ("memlimit,m", p_opt::value<uint64_t>(&memLimit)->default_value(0),
                    "Cap memory use to a predefined value (KBs).")
     ("nthreads,t", p_opt::value<unsigned int>(&nthreads)->default_value(1),
                  "Number of threads to spawn, 1 by default")
