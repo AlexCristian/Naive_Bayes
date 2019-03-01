@@ -246,7 +246,7 @@ void Class<T>::load(path source_path){
   freqcnt_lg = new unordered_map<T, double_wflag>;
   freqcnt = new unordered_map<T, int>;
 
-  ifstream in(source_path.native());
+  std::ifstream in(source_path.native());
   if(in.good()){
     deserialize(in);
   }
@@ -255,7 +255,7 @@ void Class<T>::load(path source_path){
 
 template <class T>
 void Class<T>::save(path destination_path){
-  ofstream out(destination_path.native());
+  std::ofstream out(destination_path.native());
   out<<serialize();
   out.close();
 }
@@ -317,7 +317,7 @@ string Class<T>::serialize(){
 }
 
 template <class T>
-void Class<T>::deserialize(ifstream& in){
+void Class<T>::deserialize(std::ifstream& in){
   long long int tmp;
 
   in>>tmp;

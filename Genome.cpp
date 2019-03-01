@@ -21,7 +21,7 @@ Genome::~Genome(){
 
 void Genome::loadSequence(){
   // Remove this code, it never gets used & was never meant for production anyway
-  ifstream in(sequence_path.native());
+  std::ifstream in(sequence_path.native());
 
   sequence = new string;
 
@@ -47,7 +47,7 @@ void Genome::loadKmerCounts(){
     // Since we're here, another thread has already loaded this data. Return.
     return;
   }
-  ifstream in(kmr_path.native());
+  std::ifstream in(kmr_path.native());
 
   kmer_counts = new unordered_map<int, int>;
 

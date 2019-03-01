@@ -56,7 +56,7 @@ public:
      * Reads a savefile and reconstructs a class from machine-readable format.
      * @param in A stream pointing to the savefile.
      */
-    void deserialize(ifstream& in);
+    void deserialize(std::ifstream& in);
 
     /**
      * Readies the instance for use and loads data from specified savefile.

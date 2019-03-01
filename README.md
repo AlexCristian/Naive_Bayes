@@ -78,6 +78,19 @@ Please post an issue on our repo.
 ## Contributions and pull requests
 ...are welcome!
 
+## Building on a local machine
+First, install the dependencies. On Ubuntu, it suffices to run:
+```
+sudo apt install make g++ libboost-all-dev
+```
+
+Then, to build on your local machine, simply run:
+```
+make
+```
+Should you wish to debug a crash, a debug-friendly binary can be produced by building the "debug" Make target.
+The experiment instructions below are written for Proteus runs, but they can be used for local runs as well - just make sure to compile in the way outlined above. Also, we'd recommend at least 16GBs for a relatively smooth experience - that should be able to allow for two cores to work concurrently. SSDs are highly recommended due to NBC++'s heavy use of disk I/O.
+
 ## Experiment Instruction (How to train and test the model):
 1. Compile the NB classifier on Proteus (boost/openmpi/gcc is the dependency):
 ```
@@ -85,7 +98,7 @@ Please post an issue on our repo.
 
 module load boost/openmpi/gcc/64/1.57.0
 
-make
+make proteus
 ```
 2. Train NB classifier:
 change the variable `EXEC_ROOT` in nb-train.bash to the path to `NB.run` (the compiled NB classifier binary). Then run command:
