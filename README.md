@@ -91,12 +91,14 @@ make
 Should you wish to debug a crash, a debug-friendly binary can be produced by building the "debug" Make target.
 The experiment instructions below are written for Proteus runs, but they can be used for local runs as well - just make sure to compile in the way outlined above. Also, we'd recommend at least 16GBs for a relatively smooth experience - that should be able to allow for two cores to work concurrently. SSDs are highly recommended due to NBC++'s heavy use of disk I/O.
 
+
 ## Experiment Instruction (How to train and test the model):
 1. Compile the NB classifier on Proteus (boost/openmpi/gcc is the dependency):
 ```
 #! /bin/bash
 
 module load boost/openmpi/gcc/64/1.57.0
+
 
 make proteus
 ```
@@ -120,11 +122,11 @@ nb-classify.bash [path-to-model] [path-to-testing_data] [fold index] [K-mer size
 ```
 for example, let's assume we have trained NB classifier based on the configurations we described above. Then the 5 trained models are stored in the same directory as your data (`~/genomes/`). Hence, the path to model is `~/genomes/` too and k-mer size is 15, then there will be 5 independent models (`save_1/` to `save_5`). The command to classify reads in testing dataset (path: `~/ncbi_reads_noerr`) using the first model is:
 ```
-nb-train.bash ~/genomes/ ~/ncbi_reads_noerr 1 15
+nb-classify.bash ~/genomes/ ~/ncbi_reads_noerr 1 15
 ```
 Similarly, classification results using the third model out of five in 5-fold cross validation can be obtained by running:
 ```
-nb-train.bash ~/genomes/ ~/ncbi_reads_noerr 3 15
+nb-classify.bash ~/genomes/ ~/ncbi_reads_noerr 3 15
 ```
 The program will print out the classification progress as well as the results in stdout.
 

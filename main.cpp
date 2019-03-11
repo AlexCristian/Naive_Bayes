@@ -32,7 +32,9 @@ void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
   string cls_s="-1"; Class<int> *current = NULL;
   for(vector<tuple<string, path, path> >::iterator iter = result.begin();
       iter != result.end(); iter++, counter++){
+
         unsigned int savefileSize = 0;
+
         bool loadedNewClass = false;
         
         // FASTA files not needed for training, so just add up the kmr file size
@@ -83,6 +85,7 @@ void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
 int printClassifierResults(vector<Genome*> reads,
                            vector<tuple<string, path, path> > result){
 
+
   unsigned int correct=0, total = reads.size();
   
   for(int i=0; i < total; i++){
@@ -106,6 +109,7 @@ int printClassifierResults(vector<Genome*> reads,
       cout<<", posterior: "<<posterior;
     }
     cout<<'\n';
+
     cout.flush();
 
     if(pred_class.compare(get<0>(result[i])) == 0){
