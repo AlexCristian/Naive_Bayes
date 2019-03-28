@@ -100,6 +100,12 @@ public:
   pqueue getConfidences();
 
   /**
+   * Returns the path on disk of the kmr count file registered for this read.
+   * @return The file's path.
+   **/
+  path getKmrPath();
+
+  /**
    * @return     The length of the FASTA sequence associated to this genome.
    */
   int size();

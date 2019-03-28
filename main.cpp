@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
+#include <unordered_map>
 #include <boost/program_options.hpp>
 using namespace std;
 namespace p_opt = boost::program_options;
@@ -22,6 +23,8 @@ const string GEN_SEQ_EXTEN(".fna");
 const string KMER_EXTEN(".kmr");
 const string PROG_VER("NB v. 0.1.5a-dev.");
 const string DEF_SAVEDIR("./NB_save");
+unordered_map<string, vector<double>* > confidence_list;
+string resultfile("");
 
 void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
              uint64_t memoryLimit){
@@ -32,9 +35,7 @@ void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
   string cls_s="-1"; Class<int> *current = NULL;
   for(vector<tuple<string, path, path> >::iterator iter = result.begin();
       iter != result.end(); iter++, counter++){
-
         unsigned int savefileSize = 0;
-
         bool loadedNewClass = false;
         
         // FASTA files not needed for training, so just add up the kmr file size
@@ -82,17 +83,56 @@ void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
       nb.processClassUpdates();
 }
 
+
+void printConfidences() {
+  if(resultfile.empty()){
+    return;
+  }
+
+  ofstream out(resultfile);
+  int nclasses;
+  nclasses = confidence_list.begin()->second->size();
+  for(unordered_map<string, vector<double>* >::iterator it = confidence_list.begin(); it != confidence_list.end(); it++) {
+    out<<it->first<<",";
+  }
+  out<<"\n";
+  for(int count = 0; count < nclasses; count++) {
+      for(unordered_map<string, vector<double>* >::iterator it = confidence_list.begin(); it != confidence_list.end(); it++) {
+        out<<(*(it->second))[count]<<",";
+      }
+      out<<"\n";
+  }
+  out.close();
+}
+
+void addToPosteriorList(Genome::pqueue &queue) {
+  double confidence;
+  string pred_class;
+
+  while(!queue.empty()){
+    pred_class = queue.top().second->getId();
+    confidence = queue.top().first;
+    queue.pop();
+
+    if (confidence_list.find(pred_class) == confidence_list.end()) {
+      confidence_list[pred_class] = new vector<double>;
+    }
+
+    confidence_list[pred_class]->push_back(confidence);
+  }
+}
+
 int printClassifierResults(vector<Genome*> reads,
                            vector<tuple<string, path, path> > result){
-
 
   unsigned int correct=0, total = reads.size();
   
   for(int i=0; i < total; i++){
     string pred_class;
     double posterior, prior;
+    Genome::pqueue queue;
     if (Genome::STORE_ALL_NUMERATORS) {
-      Genome::pqueue queue = reads[i]->getConfidences();
+      queue = reads[i]->getConfidences();
 
       pred_class = queue.top().second->getId();
       posterior = queue.top().first;
@@ -105,11 +145,11 @@ int printClassifierResults(vector<Genome*> reads,
 
     cout<<"Genome with class "<<get<0>(result[i]);
     cout<<", predicted "<<pred_class;
+    cout<<", filename: "<<reads[i]->getKmrPath();
     if (Genome::STORE_ALL_NUMERATORS) {
-      cout<<", posterior: "<<posterior;
+      addToPosteriorList(queue);
     }
     cout<<'\n';
-
     cout.flush();
 
     if(pred_class.compare(get<0>(result[i])) == 0){
@@ -130,6 +170,7 @@ int printClassifierResults(vector<Genome*> reads,
     }
     */
   }
+  printConfidences();
 
   for(vector<Genome*>::iterator iter = reads.begin();
       iter != reads.end(); iter++){
@@ -218,6 +259,8 @@ all at once by default")
     ("p_posterior,p", p_opt::value<bool>(&print_posterior)->default_value(Genome::STORE_ALL_NUMERATORS),
                "Print posteriors for every classified read. This \
 flag increases the classifier's memory usage and is not compatible with the memory cap flag.")
+    ("resf,r", p_opt::value<string>(&resultfile)->default_value(""),
+            "Output path for posterior logs. Log files will not be created by default.")
   ;
   
   p_opt::positional_options_description pos_args;
@@ -251,6 +294,11 @@ flag increases the classifier's memory usage and is not compatible with the memo
   create_directories(savedir);
   NB nb(kmersize, path(savedir), nthreads);
   nb.debug_flag = NB::Debug::LOG_SOME;
+
+  if (!resultfile.empty()) {
+    print_posterior = true;
+  }
+
   Genome::STORE_ALL_NUMERATORS = print_posterior;
 
   if(mode.compare("train") == 0){

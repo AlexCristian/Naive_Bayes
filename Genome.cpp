@@ -19,6 +19,10 @@ Genome::~Genome(){
   unload();
 }
 
+path Genome::getKmrPath(){
+  return kmr_path;
+}
+
 void Genome::loadSequence(){
   // Remove this code, it never gets used & was never meant for production anyway
   std::ifstream in(sequence_path.native());
