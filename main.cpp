@@ -24,6 +24,7 @@ const string KMER_EXTEN(".kmr");
 const string PROG_VER("NB v. 0.1.5a-dev.");
 const string DEF_SAVEDIR("./NB_save");
 unordered_map<string, vector<double>* > confidence_list;
+vector<path> read_filenames;
 string resultfile("");
 
 void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
@@ -92,11 +93,13 @@ void printConfidences() {
   ofstream out(resultfile);
   int nclasses;
   nclasses = confidence_list.begin()->second->size();
+  out<<"Filename,";
   for(unordered_map<string, vector<double>* >::iterator it = confidence_list.begin(); it != confidence_list.end(); it++) {
     out<<it->first<<",";
   }
   out<<"\n";
   for(int count = 0; count < nclasses; count++) {
+      out<<read_filenames[count]<<",";
       for(unordered_map<string, vector<double>* >::iterator it = confidence_list.begin(); it != confidence_list.end(); it++) {
         out<<(*(it->second))[count]<<",";
       }
@@ -146,6 +149,7 @@ int printClassifierResults(vector<Genome*> reads,
     cout<<"Genome with class "<<get<0>(result[i]);
     cout<<", predicted "<<pred_class;
     cout<<", filename: "<<reads[i]->getKmrPath();
+    read_filenames.push_back(reads[i]->getKmrPath());
     if (Genome::STORE_ALL_NUMERATORS) {
       addToPosteriorList(queue);
     }
