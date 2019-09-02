@@ -1,0 +1,13 @@
+#! /bin/bash
+NTHREADS=$4
+EXEC_ROOT=/lustre/scratch/zz374/CAMI/NB.run
+GEN_SRC=$1
+MODEL=$2
+KMERSIZE=$3
+
+MEMLIM=$((NTHREADS * 1400000)) # 48GB for 16 cores: 3 GB/core - 1.6 GB/class = 1400000
+
+echo 'TESTING_READS', $GEN_SRC
+echo 'MODEL_INDEX', $MODEL
+
+$EXEC_ROOT classify $GEN_SRC -s $MODEL -t $NTHREADS -k $KMERSIZE -m $MEMLIM
