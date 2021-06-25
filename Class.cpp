@@ -338,4 +338,5 @@ void Class<T>::deserialize(std::ifstream& in){
 template <class T>
 ostream& operator<<(ostream& out, Class<T>& cls){
   out<<cls.serialize();
+  return out;
 }
