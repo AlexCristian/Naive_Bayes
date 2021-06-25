@@ -22,4 +22,4 @@ NB.run: Class.cpp Class.hpp NB.cpp NB.hpp main.cpp Genome.hpp Genome.cpp Diskuti
 	$(CXX) $(OPT) $(CPPFLAGS) Genome.cpp Class.hpp NB.cpp Diskutil.cpp main.cpp -o NB.run $(LDFLAGS)
 	chmod +x NB.run
 clean:
-	@rm NB.run
+	@rm -f NB.run
