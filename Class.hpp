@@ -142,6 +142,18 @@ public:
      */
     bool loaded();
 
+    /**
+     * Whether k-mer counts are canonical (a k-mer and its reverse complement
+     * counted together). Sets the vocabulary size used for smoothing.
+     */
+    static bool CANONICAL_KMERS;
+
+    /**
+     * Number of distinct k-mers of the given size, the "K" of Laplace
+     * smoothing.
+     */
+    static double vocabularySize(int kmer_size);
+
 protected:
   bool isLoaded = false;
   string id;

@@ -16,6 +16,7 @@
 #include <vector>
 #include <thread>
 #include <mutex>
+#include <unordered_set>
 #include "Genome.hpp"
 #include "Class.hpp"
 #include "Diskutil.hpp"
@@ -67,20 +68,27 @@ public:
      * Adds a class to the classifier.
      * @param cl The class to be added.
      */
-    void addClass(Class<int>* cl);
+    void addClass(Class<kmer_t>* cl);
 
     /**
      * Looks up a class in the classifier by its ID.
      * @param cl_id Unique class ID.
      */
-    Class<int>* getClass(string cl_id);
+    Class<kmer_t>* getClass(string cl_id);
 
     /**
      * Adds a class to the update queue, instead of processing updates right
-     * away.
+     * away. A class already waiting in the queue is not added again.
      * @param cl Class to add to the queue.
+     * @return   True if the class was added, false if it was already queued.
      */
-    void addClassToUpdateQueue(Class<int>* cl);
+    bool addClassToUpdateQueue(Class<kmer_t>* cl);
+
+    /**
+     * @param cl Class to look up.
+     * @return   True if the class is waiting in the update queue.
+     */
+    bool isClassQueuedForUpdate(Class<kmer_t>* cl);
 
     /**
      * Triggers all queued classes to update.
@@ -110,10 +118,11 @@ public:
     } debug_flag;
 
 protected:
-    unordered_map<string, Class<int>* > classes;
+    unordered_map<string, Class<kmer_t>* > classes;
     int kmer_size, progress, total, nthreads;
     path save_dir;
-    queue<Class<int>* > classesToProcess;
+    queue<Class<kmer_t>* > classesToProcess;
+    unordered_set<Class<kmer_t>* > classesQueuedForUpdate;
     mutex classQueueAccess;
 
     static int min(int a, int b, int c);

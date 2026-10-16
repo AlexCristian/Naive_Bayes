@@ -20,7 +20,7 @@ NB::NB(int _kmer_size, path _save_dir, int _nthreads)  {
 }
 
 NB::~NB() {
-  for(unordered_map<string, Class<int>* >::iterator iter = classes.begin();
+  for(unordered_map<string, Class<kmer_t>* >::iterator iter = classes.begin();
     iter != classes.end(); iter++)
       delete iter->second;
 }
@@ -35,12 +35,12 @@ void NB::load(){
 
     string filename = iter->filename().native();
     string cls_s = filename.substr(0,filename.rfind('-'));
-    addClass(new Class<int>(cls_s, kmer_size, *iter));
+    addClass(new Class<kmer_t>(cls_s, kmer_size, *iter));
   }
 }
 
 void NB::save(){
-  for(unordered_map<string, Class<int>* >::iterator iter = classes.begin();
+  for(unordered_map<string, Class<kmer_t>* >::iterator iter = classes.begin();
       iter != classes.end(); iter++){
         if(iter->second->loaded()){
           iter->second->save();
@@ -48,11 +48,11 @@ void NB::save(){
       }
 }
 
-void NB::addClass(Class<int>* cl){
+void NB::addClass(Class<kmer_t>* cl){
     classes[cl->getId()] = cl;
 }
 
-Class<int>* NB::getClass(string cl_id){
+Class<kmer_t>* NB::getClass(string cl_id){
   if(classes.find(cl_id) == classes.end()){
     return NULL;
   }
@@ -67,8 +67,17 @@ path NB::getSavedir(){
   return save_dir;
 }
 
-void NB::addClassToUpdateQueue(Class<int>* cl){
+bool NB::isClassQueuedForUpdate(Class<kmer_t>* cl){
+  return classesQueuedForUpdate.count(cl) != 0;
+}
+
+bool NB::addClassToUpdateQueue(Class<kmer_t>* cl){
+  // Two queue entries for one class would let two threads train it at once.
+  if(!classesQueuedForUpdate.insert(cl).second){
+    return false;
+  }
   classesToProcess.push(cl);
+  return true;
 }
 
 void NB::processClassUpdates(){
@@ -93,6 +102,7 @@ void NB::processClassUpdates(){
     workers[i]->join();
     delete workers[i];
   }
+  classesQueuedForUpdate.clear();
 }
 
 void NB::trainThreadController(){
@@ -105,7 +115,7 @@ void NB::trainThreadController(){
       continue;
     }
 
-    Class<int>* cl = classesToProcess.front();
+    Class<kmer_t>* cl = classesToProcess.front();
     classesToProcess.pop();
 
     if(NB::debug_flag == NB::Debug::LOG_SOME
@@ -137,7 +147,7 @@ void NB::classifyThreadController(vector<Genome*>& reads){
       continue;
     }
 
-    Class<int>* cl = classesToProcess.front();
+    Class<kmer_t>* cl = classesToProcess.front();
     classesToProcess.pop();
 
     if(NB::debug_flag == NB::Debug::LOG_SOME){
@@ -163,9 +173,9 @@ void NB::classify(vector<Genome*> reads){
     cout.flush();
   }
 
-  for(unordered_map<string, Class<int>* >::iterator iter = classes.begin();
+  for(unordered_map<string, Class<kmer_t>* >::iterator iter = classes.begin();
     iter != classes.end(); iter++){
-      Class<int> *cl = iter->second;
+      Class<kmer_t> *cl = iter->second;
       classesToProcess.push(cl);
     }
 
@@ -214,7 +224,7 @@ int NB::levenshteinDistance(string src, string tgt){
     int adj_i = 1;
     dist[adj_i][0] = i;
     for(int j=1; j <= s_len; j++){
-      if(src[j] == tgt[i])
+      if(src[j-1] == tgt[i-1])
         elem_cost = 0;
       else
         elem_cost = 1;

@@ -9,6 +9,8 @@
 #ifndef Genome_hpp
 #define Genome_hpp
 
+#include <atomic>
+#include <cstdint>
 #include <vector>
 #include <utility>
 #include <unordered_map>
@@ -25,11 +27,20 @@ using namespace boost::accumulators;
 template <class T>
 class Class;
 
+// 2 bits per base, so k-mers up to k = 32 fit without collisions.
+typedef uint64_t kmer_t;
+
 class Genome {
 private:
 public:
-  typedef pair<double, Class<int>* > score;
-  typedef priority_queue<score, vector<score>, less<score> > pqueue;
+  typedef pair<double, Class<kmer_t>* > score;
+
+  // Orders scores by value, breaking ties by class ID so results don't depend
+  // on hash map order or thread timing.
+  struct ScoreLess {
+    bool operator()(const score& a, const score& b) const;
+  };
+  typedef priority_queue<score, vector<score>, ScoreLess> pqueue;
 
   /**
    * Instantiates a Genome instance.
@@ -76,7 +87,7 @@ public:
    * @param  class Instance of Class object to use for the computation.
    * @return       Score correlated to probability of class membership.
    */
-  void computeClassificationNumerator(Class<int>* cls);
+  void computeClassificationNumerator(Class<kmer_t>* cls);
 
   /**
    * Gets the character located at position "pos" in the DNA sequence.
@@ -114,7 +125,7 @@ public:
    * @return     A hashmap containing the counts (values) associated to each
    *             kmer (key).
    */
-  unordered_map<int, int>& getKmerCounts();
+  unordered_map<kmer_t, int>& getKmerCounts();
 
   /**
    * When the STORE_ALL_NUMERATORS flag is false, returns the highest ranked class.
@@ -122,20 +133,27 @@ public:
   score getMaximum();
 
   static bool STORE_ALL_NUMERATORS;
+
+  /**
+   * Expected k-mer length in count files. When nonzero, k-mers of any other
+   * length abort the program instead of being silently mis-encoded.
+   */
+  static unsigned int KMER_SIZE;
 protected:
-  bool kmersLoaded = false, sequenceLoaded = false;
+  atomic<bool> kmersLoaded{false};
+  bool sequenceLoaded = false;
   pqueue numerator;
   mutex numeratorAccess, loadKmersLock, loadSequenceLock;
   path sequence_path, kmr_path;
   string *sequence;
-  unordered_map<int, int> *kmer_counts;
+  unordered_map<kmer_t, int> *kmer_counts;
   long long int max(long long int a,
                     long long int b,
                     long long int c,
                     long long int d);
 
   double maximumNumerator;
-  Class<int>* maximumNumeratorClass = NULL;
+  Class<kmer_t>* maximumNumeratorClass = NULL;
 };
 
 #include "Class.hpp"

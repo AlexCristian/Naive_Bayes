@@ -7,8 +7,18 @@
 //
 
 #include "Genome.hpp"
+#include <stdexcept>
 
 bool Genome::STORE_ALL_NUMERATORS = false;
+unsigned int Genome::KMER_SIZE = 0;
+
+bool Genome::ScoreLess::operator()(const score& a, const score& b) const {
+  if(a.first != b.first){
+    return a.first < b.first;
+  }
+  // Equal scores: the lexicographically smaller class ID ranks higher.
+  return a.second->getId() > b.second->getId();
+}
 
 Genome::Genome(path _kmr_path, path _sequence_path){
   kmr_path = _kmr_path;
@@ -40,25 +50,30 @@ void Genome::loadSequence(){
 }
 
 void Genome::loadKmerCounts(){
-  if(!loadKmersLock.try_lock()){
-    /*
-     * Another thread is trying to load this at the same time,
-     * wait for it to finish and then return.
-     */
-    loadKmersLock.lock();
-    loadKmersLock.unlock();
-
-    // Since we're here, another thread has already loaded this data. Return.
+  /*
+   * Several classifier threads can ask for the same read at once. Re-check the
+   * flag under the lock so only the first one loads, and the others wait for
+   * it to finish instead of reloading into a fresh map.
+   */
+  lock_guard<mutex> guard(loadKmersLock);
+  if(kmersLoaded){
     return;
   }
+
   std::ifstream in(kmr_path.native());
 
-  kmer_counts = new unordered_map<int, int>;
+  kmer_counts = new unordered_map<kmer_t, int>;
 
-  int kmer, kmer_count; string kmer_s;
+  kmer_t kmer; int kmer_count; string kmer_s;
   while(in>>kmer_s>>kmer_count){
+    if(kmer_s.size() > 32 || (KMER_SIZE != 0 && kmer_s.size() != KMER_SIZE)){
+      cerr<<"[ERROR] k-mer \""<<kmer_s<<"\" in "<<kmr_path.native()
+          <<" does not match the k-mer size ("<<KMER_SIZE<<", max 32).\n";
+      exit(1);
+    }
     kmer = 0;
-    for(string::iterator it = kmer_s.begin(); it != kmer_s.end(); it++){
+    bool valid = true;
+    for(string::iterator it = kmer_s.begin(); valid && it != kmer_s.end(); it++){
       kmer<<=2;
       switch(*it){
         case 'A':
@@ -77,13 +92,17 @@ void Genome::loadKmerCounts(){
         case 't':
           kmer+=3;
           break;
+        default:
+          // Ambiguous bases (N, IUPAC codes) carry no k-mer identity; skip.
+          valid = false;
       }
     }
-    (*kmer_counts)[kmer]=kmer_count;
+    if(valid){
+      (*kmer_counts)[kmer]+=kmer_count;
+    }
   }
   in.close();
   kmersLoaded = true;
-  loadKmersLock.unlock();
 }
 
 void Genome::unload(){
@@ -98,7 +117,7 @@ void Genome::unload(){
   }
 }
 
-unordered_map<int, int>& Genome::getKmerCounts(){
+unordered_map<kmer_t, int>& Genome::getKmerCounts(){
   if(!kmersLoaded){
     loadKmerCounts();
   }
@@ -109,7 +128,7 @@ string& Genome::getSequence(){
   return *sequence;
 }
 
-void Genome::computeClassificationNumerator(Class<int>* cl){
+void Genome::computeClassificationNumerator(Class<kmer_t>* cl){
   accumulator_set<double, features<tag::sum_kahan> > current, sumfrq;
   
   current(cl->getNGenomes_lg());
@@ -118,8 +137,9 @@ void Genome::computeClassificationNumerator(Class<int>* cl){
     strs<<"("<<cl->getId()<<"): "<<sum_kahan(current);
   }
 
-  for(unordered_map<int, int>::iterator freq = getKmerCounts().begin();
-    freq != getKmerCounts().end(); freq++){
+  unordered_map<kmer_t, int>& counts = getKmerCounts();
+  for(unordered_map<kmer_t, int>::iterator freq = counts.begin();
+    freq != counts.end(); freq++){
       sumfrq(freq->second);
       current(freq->second * cl->getFreqCount_lg(freq->first));
       if(NB::debug_flag == NB::Debug::LOG_ALL){
@@ -137,7 +157,8 @@ void Genome::computeClassificationNumerator(Class<int>* cl){
   if(!Genome::STORE_ALL_NUMERATORS){
     double candidateNumerator = sum_kahan(current);
     if(maximumNumeratorClass == NULL
-      || maximumNumerator < candidateNumerator){
+      || ScoreLess()(make_pair(maximumNumerator, maximumNumeratorClass),
+                     make_pair(candidateNumerator, cl))){
         maximumNumerator = candidateNumerator;
         maximumNumeratorClass = cl;
       }
@@ -192,49 +213,9 @@ int Genome::size(){
 }
 
 long long int Genome::computeAlignmentScore(Genome* seq){
-  Genome *a, *b;
-  if(seq->size() < getSequence().size()){
-    a=seq;
-    b=this;
-  }else{
-    a=this;
-    b=seq;
-  }
-
-  vector<vector<long long int> > cost(2);
-  int v_len = a->size();
-  for(int i=0; i < v_len; i++){
-    cost[0].push_back(0);
-    cost[1].push_back(0);
-  }
-
-  vector<int> cmax(v_len), c_ind(v_len);
-
-  int rep_n = b->size(), lmax, l_ind, highscore, hs_ind=-1;
-  for(int i=0; i < rep_n; i++){
-    for(int j=1; i < v_len; j++){
-      throw exception();
-      cost[1][j] = max(cost[0][j-1] /*+ distance(a->charAt(i), b->charAt(j))*/,
-                       cmax[j] /*- penalty(j - c_ind[j])*/,
-                       (l_ind != -1) ? lmax /*- penalty(j - l_ind)*/ : 0,
-                       0);
-      if(cost[1][j] > lmax || l_ind == -1){
-        lmax = cost[1][j];
-        l_ind = j;
-      }
-      if(cost[1][j] > cmax[j] /*- penalty(j - c_ind[j])*/){
-        cmax[j] = cost[1][j];
-        c_ind[j] = j;
-      }
-      if(cost[1][j] > highscore || hs_ind == -1){
-        hs_ind = 1;
-        highscore = cost[1][j];
-      }
-    }
-    cost[0].swap(cost[1]);
-  }
-
-  return highscore;
+  // The Smith-Waterman scoring (distance & gap penalty) was never written.
+  // Fail loudly instead of running a loop over uninitialized state.
+  throw logic_error("Genome::computeAlignmentScore is not implemented");
 }
 
 string Genome::charAt(int pos){

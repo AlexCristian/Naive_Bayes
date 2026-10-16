@@ -10,14 +10,30 @@
 #include "NB.hpp"
 
 template <class T>
+bool Class<T>::CANONICAL_KMERS = true;
+
+template <class T>
+double Class<T>::vocabularySize(int kmer_size){
+  double all = pow(4.0, kmer_size);
+  if(!CANONICAL_KMERS){
+    return all;
+  }
+  // A k-mer and its reverse complement share one canonical form; only even-k
+  // palindromes are their own reverse complement.
+  double palindromes = (kmer_size % 2 == 0) ? pow(4.0, kmer_size / 2) : 0;
+  return (all + palindromes) / 2;
+}
+
+template <class T>
 Class<T>::Class(string id_, int kmer_size, path _savefile)  {
   ngenomes_lg = make_pair(0, false);
-  sumfreq_lg = make_pair(0, false);
+
+  // Laplace smoothing adds 1 per possible k-mer, so the denominator starts at
+  // the vocabulary size and grows with the class's total k-mer count.
+  sumfreq_lg = make_pair(log(vocabularySize(kmer_size)), false);
 
   ngenomes=0;
-
-  sumfreq=1;
-  sumfreq<<=2*kmer_size;
+  sumfreq=0;
 
   id = id_;
 
@@ -206,9 +222,9 @@ void Class<T>::addGenome(Genome* genome, double confidence_lg){
   else
     addNGenomes_lg(confidence_lg + log(1));
 
-  int sum=0, new_features=0;
-  unordered_map<int, int> freqs = genome->getKmerCounts();
-  for(unordered_map<int, int>::iterator iter = freqs.begin();
+  long long int sum=0, new_features=0;
+  unordered_map<T, int>& freqs = genome->getKmerCounts();
+  for(typename unordered_map<T, int>::iterator iter = freqs.begin();
     iter != freqs.end(); iter++){
       sum += iter->second;
       if(existsInFreqCount(iter->first)){
@@ -318,7 +334,7 @@ string Class<T>::serialize(){
 
 template <class T>
 void Class<T>::deserialize(std::ifstream& in){
-  long long int tmp;
+  uint64_t tmp;
 
   in>>tmp;
   ngenomes_lg = make_pair(deserializeDouble(tmp), true);
@@ -326,10 +342,11 @@ void Class<T>::deserialize(std::ifstream& in){
   in>>tmp;
   sumfreq_lg = make_pair(deserializeDouble(tmp), true);
 
-  int n, kmer;
+  size_t n;
+  T kmer;
   in>>n;
 
-  for(int i=0; i<n; i++){
+  for(size_t i=0; i<n; i++){
     in>>kmer>>tmp;
     getFreqcnt_lg()[kmer] = make_pair(deserializeDouble(tmp), true);
   }
@@ -338,4 +355,5 @@ void Class<T>::deserialize(std::ifstream& in){
 template <class T>
 ostream& operator<<(ostream& out, Class<T>& cls){
   out<<cls.serialize();
+  return out;
 }

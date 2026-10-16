@@ -6,7 +6,7 @@ function clearLastLine {
 
 if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]
   then
-    echo "usage: ./jellyfish_gen.bash [source directory with fasta files] [k-mer size] [is full genome: true, false] [resume from #]
+    echo "usage: ./jellyfish_gen.bash [source directory with fasta files] [k-mer size] [is full genome: true, false (kept for compatibility; both are counted canonically)] [resume from #]
     "
     exit
 fi
@@ -34,32 +34,20 @@ do
   filename="${file%.*}"
   size=$( cat "$file" | wc -c )
   size=$( awk -v a="$size" -v b="$seq_err" 'BEGIN{printf("%d\n",(a + a * b) + 0.5)}' )
-  if [ $3 == "true" ]
-  then
-    sgn=1
-    while [ $sgn != "0" ]
-    do
-      timeout --preserve-status 300 jellyfish count -m $2 -s $size -t 256 $file
-      sgn=$?
-      if [ $sgn != "0" ]
-      then
-        echo "Stuck. Retrying"
-        rm mer_counts.jf
-      fi
-    done
-  else
-    sgn=1
-    while [ $sgn != "0" ]
-    do
-      timeout --preserve-status 300 jellyfish count -m $2 -s $size -t 256 -C $file
-      sgn=$?
-      if [ $sgn != "0" ]
-      then
-        echo "Stuck. Retrying"
-        rm mer_counts.jf
-      fi
-    done
-  fi
+  # Genomes and reads must be counted the same way, or a read's k-mers won't
+  # line up with the trained k-mers. Count canonically (-C) in both cases, so a
+  # read matches its genome whichever strand it was sequenced from.
+  sgn=1
+  while [ $sgn != "0" ]
+  do
+    timeout --preserve-status 300 jellyfish count -m $2 -s $size -t 256 -C $file
+    sgn=$?
+    if [ $sgn != "0" ]
+    then
+      echo "Stuck. Retrying"
+      rm mer_counts.jf
+    fi
+  done
   jellyfish dump -c mer_counts.jf > $filename.kmr
   rm mer_counts.jf
   echo "($progress/$file_count) Generate kmer count for $file [COMPLETE]"

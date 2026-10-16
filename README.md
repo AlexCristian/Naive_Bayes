@@ -30,6 +30,12 @@ Allowed options:
                                     This flag increases the classifier's memory
                                     usage and is not compatible with the memory
                                     cap flag.
+  -r [ --resf ] arg                 Output path for posterior logs. Log files
+                                    will not be created by default.
+  -c [ --canonical ] arg (=1)       Whether k-mer count files hold canonical
+                                    k-mers (jellyfish -C). Sets the vocabulary
+                                    size used for smoothing; must match how
+                                    counts were made.
 ```
 
 ### -m : Using the --memlimit memory cap option
@@ -60,7 +66,12 @@ The default value is ".kmr", which will make the program look for files like "My
 ### -k : Using the --kmersize option
 A different kmer size than the default may be selected by modifying this option.
 
-The default value is 6, which will make the program output and expect 6-mers.
+The default value is 6, which will make the program output and expect 6-mers. The maximum is 32. Count files whose k-mers have a different length are rejected.
+
+### -c : Using the --canonical option
+Training genomes and reads must be counted the same way. The supplied Jellyfish script counts canonical k-mers (`jellyfish count -C`) for both, so a read matches its genome whichever strand it came from. This option tells NBC++ which convention the counts follow, so that Laplace smoothing uses the right number of possible k-mers: 4^k without `-C`, about half of that with it.
+
+The default value is 1 (canonical counts).
 
 ### -s : Using the --savedir option
 This option specifies a target directory in which to save or load training data, depending on the mode. Each savefile in this directory corresponds to one class.

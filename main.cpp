@@ -29,55 +29,55 @@ string resultfile("");
 
 void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
              uint64_t memoryLimit){
-  unsigned int count = 1, counter = 0;
+  unsigned int queuedGenomes = 0;
   uint64_t usedMemory = 0;
   vector<tuple<string, path, path> > result =
     Diskutil::getTrainingGenomePaths(srcdir, extension);
-  string cls_s="-1"; Class<int> *current = NULL;
   for(vector<tuple<string, path, path> >::iterator iter = result.begin();
-      iter != result.end(); iter++, counter++){
-        unsigned int savefileSize = 0;
-        bool loadedNewClass = false;
-        
-        // FASTA files not needed for training, so just add up the kmr file size
-        int genomeSize = Diskutil::getFileSize(get<1>(*iter));
+      iter != result.end(); iter++){
+        string cls_s = get<0>(*iter);
+        Class<kmer_t> *current = nb.getClass(cls_s);
 
-        if(cls_s.compare(get<0>(*iter)) != 0){
-
-          cls_s = get<0>(*iter);
-
-          current = nb.getClass(cls_s);
-
-          if(current == NULL){
-            path save_file = path(nb.getSavedir().native()
-                                  + path::preferred_separator
-                                  + cls_s + "-save.dat");
-            current = new Class<int>(cls_s,
-                                     nb.getKmerSize(),
-                                     save_file);
-            nb.addClass(current);
-          }
-
-          savefileSize = Diskutil::getFileSize(current->getSavefilePath());
-          loadedNewClass = true;
+        if(current == NULL){
+          path save_file = path(nb.getSavedir().native()
+                                + path::preferred_separator
+                                + cls_s + "-save.dat");
+          current = new Class<kmer_t>(cls_s,
+                                   nb.getKmerSize(),
+                                   save_file);
+          nb.addClass(current);
         }
 
-        if(memoryLimit != 0 && usedMemory + genomeSize + savefileSize> memoryLimit){
+        // FASTA files not needed for training, so just add up the kmr file size
+        uint64_t genomeSize = Diskutil::getFileSize(get<1>(*iter));
+        uint64_t savefileSize =
+          Diskutil::getFileSize(current->getSavefilePath());
+
+        // The savefile only costs memory the first time its class joins a
+        // batch; later genomes of the same class reuse it.
+        bool classPending = nb.isClassQueuedForUpdate(current);
+        uint64_t needed = genomeSize + (classPending ? 0 : savefileSize);
+        if(memoryLimit != 0 && queuedGenomes > 0
+           && usedMemory + needed > memoryLimit){
           nb.processClassUpdates();
           usedMemory = 0;
-          cls_s = "-1"; // This will force the next iteration to add this savefile's size again
+          queuedGenomes = 0;
+          classPending = false;
+          needed = genomeSize + savefileSize;
         }
 
+        // Queue the genome and (re-)queue its class together, so a flushed
+        // class is always queued again before more genomes are added to it.
         Genome *genome = new Genome(get<1>(*iter), get<2>(*iter));
         current->queueGenome(genome);
-        if(loadedNewClass){
-          nb.addClassToUpdateQueue(current);
-          usedMemory += savefileSize;
-        }
-        usedMemory += genomeSize;
+        nb.addClassToUpdateQueue(current);
+        usedMemory += needed;
+        queuedGenomes++;
 
-        if(nbatch != 0 && counter % nbatch == 0){
+        if(nbatch != 0 && queuedGenomes >= nbatch){
           nb.processClassUpdates();
+          usedMemory = 0;
+          queuedGenomes = 0;
         }
       }
 
@@ -87,6 +87,10 @@ void trainNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
 
 void printConfidences() {
   if(resultfile.empty()){
+    return;
+  }
+
+  if(confidence_list.empty()){
     return;
   }
 
@@ -196,7 +200,9 @@ void classifyNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
 
     unsigned int genomeSize = Diskutil::getFileSize(get<1>(*iter));
 
-    if(memoryLimit != 0 && usedMemory + genomeSize > memoryLimit){
+    // Never flush an empty batch (e.g. when one read alone exceeds the cap).
+    if(memoryLimit != 0 && !reads.empty()
+       && usedMemory + genomeSize > memoryLimit){
       nb.classify(reads);
       correct += printClassifierResults(reads, result);
       usedMemory = 0;
@@ -205,7 +211,7 @@ void classifyNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
       reads.clear();
     }
 
-    if(nbatch != 0 && counter != 0 && counter % nbatch == 0){
+    if(nbatch != 0 && reads.size() >= nbatch){
       nb.classify(reads);
       correct += printClassifierResults(reads, result);
       usedMemory = 0;
@@ -219,8 +225,10 @@ void classifyNB(NB &nb, path srcdir, string extension, unsigned int nbatch,
     usedMemory += genomeSize;
   }
   
-  nb.classify(reads);
-  correct += printClassifierResults(reads, result);
+  if(!reads.empty()){
+    nb.classify(reads);
+    correct += printClassifierResults(reads, result);
+  }
   usedMemory = 0;
 
   cout<<"Accuracy: "<<correct*1.0/total<<"\n";
@@ -233,7 +241,7 @@ int main(int argc, char* argv[]){
   unsigned int nbatch, nthreads, kmersize;
   uint64_t memLimit;
   string kmer_ext, srcdir, mode, savedir;
-  bool print_posterior;
+  bool print_posterior, canonical;
 
   p_opt::options_description generic("Generic options");
   generic.add_options()
@@ -265,6 +273,9 @@ all at once by default")
 flag increases the classifier's memory usage and is not compatible with the memory cap flag.")
     ("resf,r", p_opt::value<string>(&resultfile)->default_value(""),
             "Output path for posterior logs. Log files will not be created by default.")
+    ("canonical,c", p_opt::value<bool>(&canonical)->default_value(true),
+            "Whether k-mer count files hold canonical k-mers (jellyfish -C). \
+Sets the vocabulary size used for smoothing; must match how counts were made.")
   ;
   
   p_opt::positional_options_description pos_args;
@@ -294,6 +305,13 @@ flag increases the classifier's memory usage and is not compatible with the memo
 
   srcdir = opt_map["srcdir"].as<string>();
   mode = opt_map["mode"].as<string>();
+
+  if(kmersize < 1 || kmersize > 32){
+    cerr<<"k-mer size must be between 1 and 32.\n";
+    return 1;
+  }
+  Genome::KMER_SIZE = kmersize;
+  Class<kmer_t>::CANONICAL_KMERS = canonical;
 
   create_directories(savedir);
   NB nb(kmersize, path(savedir), nthreads);
