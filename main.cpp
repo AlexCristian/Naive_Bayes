@@ -313,9 +313,21 @@ Sets the vocabulary size used for smoothing; must match how counts were made.")
   Genome::KMER_SIZE = kmersize;
   Class<kmer_t>::CANONICAL_KMERS = canonical;
 
-  create_directories(savedir);
+  bool training = mode.compare("train") == 0 || mode.compare("benchmark") == 0;
+  if(training){
+    create_directories(savedir);
+  }else if(!is_directory(savedir)){
+    // Don't create it: a mistyped -s would otherwise yield an empty model.
+    cerr<<"Save directory "<<savedir<<" does not exist.\n";
+    return 1;
+  }
   NB nb(kmersize, path(savedir), nthreads);
   nb.debug_flag = NB::Debug::LOG_SOME;
+
+  if(mode.compare("classify") == 0 && nb.numClasses() == 0){
+    cerr<<"Save directory "<<savedir<<" holds no trained classes.\n";
+    return 1;
+  }
 
   if (!resultfile.empty()) {
     print_posterior = true;

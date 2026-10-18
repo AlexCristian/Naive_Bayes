@@ -15,12 +15,13 @@ then
 fi
 
 progress=1
-file_count=$(find $1 -iname *.fasta | wc -l)
-for file in $(find $1 -iname *.fasta)
+file_count=$(find $1 -iname '*.fasta' | wc -l)
+for file in $(find $1 -iname '*.fasta')
 do
   echo "($progress/$file_count) Iterating over files, $file [IN PROGRESS]"
   filename="${file%.*}"
-  if [ $(( $RANDOM % 10 )) -gt $3 ]
+  # Copy each file with probability [fraction]/10 (0 copies none, 10 all).
+  if [ $(( $RANDOM % 10 )) -lt $3 ]
   then
     class=$(dirname "$file")
     class="${class##*/}"

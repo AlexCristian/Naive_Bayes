@@ -36,8 +36,18 @@ Class<T>::Class(string id_, int kmer_size, path _savefile)  {
   sumfreq=0;
 
   id = id_;
+  kmerSize = kmer_size;
 
   savefile = _savefile;
+}
+
+template <class T>
+void Class<T>::savefileError(path file, string what){
+  cerr<<"[ERROR] Savefile "<<file.native()<<" (class "<<id<<"): "<<what<<"\n";
+  cerr.flush();
+  // Other threads may be mid-update; their savefiles are written to a temp
+  // file and renamed, so stopping here leaves every savefile intact.
+  _Exit(1);
 }
 
 template <class T>
@@ -57,7 +67,13 @@ template <class T>
 void Class<T>::addGenomesInQueue(){
   while(!queuedGenomes.empty()){
     Genome* current = queuedGenomes.front();
-    addGenome(current);
+    string name = current->getKmrPath().filename().native();
+    if(!trainedGenomes.insert(name).second){
+      cout<<"Skipping "<<name<<": already trained into class "<<id<<"\n";
+      genomes.push_back(current);
+    }else{
+      addGenome(current);
+    }
     current->unload();
     queuedGenomes.pop();
   }
@@ -261,19 +277,38 @@ void Class<T>::load(path source_path){
 
   freqcnt_lg = new unordered_map<T, double_wflag>;
   freqcnt = new unordered_map<T, int>;
+  trainedGenomes.clear();
 
-  std::ifstream in(source_path.native());
-  if(in.good()){
-    deserialize(in);
+  // No savefile yet means a new, empty class. An existing savefile that
+  // can't be read is an error, not an empty class.
+  if(!exists(source_path)){
+    return;
   }
+  std::ifstream in(source_path.native());
+  if(!in.good()){
+    savefileError(source_path, "cannot open for reading");
+  }
+  deserialize(in);
   in.close();
 }
 
 template <class T>
 void Class<T>::save(path destination_path){
-  std::ofstream out(destination_path.native());
+  // Write to a temp file and rename it over the old savefile, so a crash or
+  // full disk mid-write never leaves a truncated savefile behind.
+  path tmp_path = path(destination_path.native() + ".tmp");
+  std::ofstream out(tmp_path.native());
   out<<serialize();
   out.close();
+  if(out.fail()){
+    remove(tmp_path);
+    savefileError(destination_path, "write failed (disk full?)");
+  }
+  boost::system::error_code ec;
+  rename(tmp_path, destination_path, ec);
+  if(ec){
+    savefileError(destination_path, "could not replace savefile: " + ec.message());
+  }
 }
 
 template <class T>
@@ -290,6 +325,7 @@ template <class T>
 void Class<T>::unload(){
   delete freqcnt;
   delete freqcnt_lg;
+  trainedGenomes.clear();
 
   isLoaded = false;
 }
@@ -317,26 +353,94 @@ template <class T>
 string Class<T>::serialize(){
   ostringstream strs;
   /*
-   * Serialization format spec.  <first, the logarithmated values>:
-   * id ngenomes_lg sumfreq_lg freqcnt_lg.size() freqcnt_lg <same_line>->
-   * ngenomes sumfreq freqcnt.size() freqcnt
+   * Serialization format spec (version 2):
+   * NBSAVE <version> <k-mer size> <canonical 0/1>
+   * ngenomes_lg sumfreq_lg freqcnt_lg.size() [kmer freqcnt_lg]...
+   * GENOMES <count>
+   * <one trained genome file name per line>
+   * Doubles are stored as their IEEE-754 bit patterns (uint64).
    */
 
+  strs<<"NBSAVE "<<SAVEFILE_VERSION<<" "<<kmerSize<<" "<<CANONICAL_KMERS<<"\n";
   strs<<serializeDouble(getNGenomes_lg())<<" ";
   strs<<serializeDouble(getSumFreq_lg())<<" "<<getFreqcnt_lg().size();
   for(typename unordered_map<T, double_wflag>::iterator iter = getFreqcnt_lg().begin();
     iter != getFreqcnt_lg().end(); iter++){
       strs<<" "<<iter->first<<" "<<serializeDouble(getFreqCount_lg(iter->first));
     }
+  strs<<"\nGENOMES "<<trainedGenomes.size()<<"\n";
+  for(typename unordered_set<string>::iterator iter = trainedGenomes.begin();
+    iter != trainedGenomes.end(); iter++){
+      strs<<*iter<<"\n";
+    }
 
   return strs.str();
 }
 
 template <class T>
+void Class<T>::checkSavefileHeader(path source_path){
+  std::ifstream in(source_path.native());
+  if(!in.good()){
+    savefileError(source_path, "cannot open for reading");
+  }
+  string magic;
+  in>>magic;
+  if(magic != "NBSAVE"){
+    return; // legacy savefile; deserialize() warns
+  }
+  int version, k, canonical;
+  if(!(in>>version>>k>>canonical)){
+    savefileError(source_path, "corrupt header");
+  }
+  if(version != SAVEFILE_VERSION){
+    savefileError(source_path, "unsupported format version "
+                  + to_string(version));
+  }
+  if(k != kmerSize){
+    savefileError(source_path, "trained with k=" + to_string(k)
+                  + " but running with k=" + to_string(kmerSize));
+  }
+  if((canonical != 0) != CANONICAL_KMERS){
+    savefileError(source_path, string("trained with ")
+                  + (canonical ? "canonical" : "non-canonical")
+                  + " k-mers, but --canonical is "
+                  + (CANONICAL_KMERS ? "1" : "0"));
+  }
+}
+
+template <class T>
 void Class<T>::deserialize(std::ifstream& in){
   uint64_t tmp;
+  string first;
+  bool legacy = false;
 
-  in>>tmp;
+  in>>first;
+  if(first == "NBSAVE"){
+    int version, k, canonical;
+    in>>version>>k>>canonical;
+    // checkSavefileHeader() reports mismatches with a clear message.
+    if(!in || version != SAVEFILE_VERSION || k != kmerSize
+       || (canonical != 0) != CANONICAL_KMERS){
+      checkSavefileHeader(savefile);
+      savefileError(savefile, "corrupt header");
+    }
+    in>>tmp;
+  }else{
+    // Format 1: no header, no genome list, nothing to check k against.
+    legacy = true;
+    static atomic<bool> warned(false);
+    if(!warned.exchange(true)){
+      cerr<<"[WARNING] Legacy savefile format (e.g. "<<savefile.native()
+          <<"): k-mer size and counting mode can't be verified, and "
+          "already-trained genomes can't be recognized. Savefiles are "
+          "upgraded when next trained.\n";
+    }
+    try{
+      tmp = stoull(first);
+    }catch(...){
+      savefileError(savefile, "not a savefile");
+    }
+  }
   ngenomes_lg = make_pair(deserializeDouble(tmp), true);
 
   in>>tmp;
@@ -345,10 +449,34 @@ void Class<T>::deserialize(std::ifstream& in){
   size_t n;
   T kmer;
   in>>n;
+  if(!in){
+    savefileError(savefile, "truncated or corrupt (header values)");
+  }
 
   for(size_t i=0; i<n; i++){
-    in>>kmer>>tmp;
+    if(!(in>>kmer>>tmp)){
+      savefileError(savefile, "truncated or corrupt (read " + to_string(i)
+                    + " of " + to_string(n) + " k-mers)");
+    }
     getFreqcnt_lg()[kmer] = make_pair(deserializeDouble(tmp), true);
+  }
+
+  if(legacy){
+    return;
+  }
+  string tag;
+  size_t m;
+  if(!(in>>tag>>m) || tag != "GENOMES"){
+    savefileError(savefile, "truncated or corrupt (genome list missing)");
+  }
+  string name;
+  getline(in, name); // rest of the GENOMES line
+  for(size_t i=0; i<m; i++){
+    if(!getline(in, name)){
+      savefileError(savefile, "truncated or corrupt (read " + to_string(i)
+                    + " of " + to_string(m) + " genome names)");
+    }
+    trainedGenomes.insert(name);
   }
 }
 

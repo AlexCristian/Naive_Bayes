@@ -47,11 +47,12 @@ do
     mkdir $class_path
   fi
 
+  # -un 0: sample reads from both strands, as real sequencing does.
   if [ $3 == "true" ]
   then
-    grinder -md poly4 3e-3 3.3e-8 -un 1 -rd 100 -tr 100 -rf $file -od $class_path > /dev/null
+    grinder -md poly4 3e-3 3.3e-8 -un 0 -rd 100 -tr 100 -rf $file -od $class_path > /dev/null
   else
-    grinder -rd 100 -tr 100 -un 1 -rf $file -od $class_path > /dev/null
+    grinder -rd 100 -tr 100 -un 0 -rf $file -od $class_path > /dev/null
   fi
   mv $class_path/grinder-reads.fa $class_path/$filename.fasta
   rm $class_path/grinder-ranks.txt
@@ -66,7 +67,9 @@ for file in $(find $TEST_GENS_FOLDER -iname "*.fasta")
 do
   echo "($progress/$file_count) Expand FASTA file, $file [IN PROGRESS]"
   filename="${file%.*}"
-  awk -v filename="$filename" -v reps=$N_FILES_EXPANDED_FROM_FAS 'BEGIN{OFS=""; ORS=""} />/{x=filename"."++i".fasta"; print $0"\n" > x; next;} {print tolower($1) > x; if(i == reps) exit;}' $filename.fasta
+  # Stop at the header after the last wanted read, so a read whose sequence
+  # spans several lines is never cut short.
+  awk -v filename="$filename" -v reps=$N_FILES_EXPANDED_FROM_FAS 'BEGIN{OFS=""; ORS=""} />/{if(i == reps) exit; if(x) close(x); x=filename"."++i".fasta"; print $0"\n" > x; next;} {print tolower($1) > x;}' $filename.fasta
   rm $filename.fasta
   echo "($progress/$file_count) Expand FASTA file, $file [COMPLETE]"
   progress=$(($progress+1))

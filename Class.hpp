@@ -18,6 +18,9 @@
 #include <cmath>
 #include <cassert>
 #include <cstring>
+#include <string>
+#include <unordered_set>
+#include <atomic>
 #include <boost/filesystem.hpp>
 using namespace boost::filesystem;
 using namespace std;
@@ -57,6 +60,14 @@ public:
      * @param in A stream pointing to the savefile.
      */
     void deserialize(std::ifstream& in);
+
+    /**
+     * Checks that a savefile was written for this k-mer size and counting
+     * mode, reading only its header. Exits with an error on mismatch.
+     * Legacy savefiles (no header) pass with a warning.
+     * @param source_path The path to the savefile on disk.
+     */
+    void checkSavefileHeader(path source_path);
 
     /**
      * Readies the instance for use and loads data from specified savefile.
@@ -154,9 +165,18 @@ public:
      */
     static double vocabularySize(int kmer_size);
 
+    /** Savefile format written by this build. */
+    static const int SAVEFILE_VERSION = 2;
+
 protected:
   bool isLoaded = false;
   string id;
+  int kmerSize;
+
+  // File names of genomes already trained into this class (kept in the
+  // savefile), so re-running training on the same files doesn't count them
+  // twice.
+  unordered_set<string> trainedGenomes;
   path savefile;
   vector<Genome*> genomes;
   queue<Genome*> queuedGenomes;
@@ -183,6 +203,7 @@ protected:
   unordered_map<T, double_wflag>& getFreqcnt_lg();
   unordered_map<T, int>& getFreqcnt();
 
+  [[noreturn]] void savefileError(path file, string what);
   static uint64_t serializeDouble(double value);
   static double deserializeDouble(uint64_t value);
   static double logAdd(vector<double> exponents);

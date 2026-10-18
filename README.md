@@ -76,7 +76,18 @@ The default value is 1 (canonical counts).
 ### -s : Using the --savedir option
 This option specifies a target directory in which to save or load training data, depending on the mode. Each savefile in this directory corresponds to one class.
 
+Savefiles start with a header recording the format version, k-mer size and counting mode, and end with the names of the genome files trained into the class:
+- Classifying or training against a savedir made with a different `-k` or `--canonical` stops with an error.
+- Training skips genome files (matched by file name) that a class already contains, so re-running a training command after a crash doesn't count genomes twice.
+- Savefiles are written to a temporary file and renamed into place, and any read or write error stops the program, so an interrupted run never leaves a truncated savefile.
+- In classify mode the savedir must already exist and hold at least one class.
+
+Savefiles written by older versions (no header) still load, with a warning, and are upgraded the next time their class is trained.
+
 The default value is "./NB_save", which will direct the program to search for a folder named NB_save in its current directory.
+
+## Tests
+`tests/run_tests.sh ./NB.run` runs regression checks for training, classification and savefile handling; `tests/test_tools.sh .` checks the scripts in `tools/`. Both need Jellyfish on the path.
 
 ## Project dependencies
 This release requires the following dependencies to be available on the host machine:

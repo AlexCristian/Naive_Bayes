@@ -35,14 +35,22 @@ function download {
   fi
 
   echo "$down_text $1 - [IN PROGRESS]"
-  wget $1 --directory-prefix $2 -q && retval=$?
-  while [ $retval -ne "0" ]
+  # Retry until wget succeeds (the old check only recorded wget's status on
+  # success, so failures were never retried and genomes went missing).
+  attempt=1
+  until wget $1 --directory-prefix $2 -q
   do
+    if [ $attempt -ge 5 ]
+    then
+      echo "$down_text $1 - [FAILED after $attempt attempts]" >&2
+      exit 1
+    fi
     clearLastLine
     echo "$down_text $1 - [FAILED]"
     echo "Retrying."
+    sleep $((2**attempt))
+    attempt=$(($attempt+1))
     echo "$down_text $1 - [IN PROGRESS]"
-    wget $1 --directory-prefix $2 -q && retval=$?
   done
 
   clearLastLine
@@ -64,9 +72,11 @@ tar -zxf .tree_data/taxdump.tar.gz -C .tree_data nodes.dmp # Extract only what w
 
 # Extract the parents and children from the node file, and split the data
 # over two files.
-awk '{print $1}' .tree_data/nodes.dmp > .tree_data/child.txt
-awk '{print $3}' .tree_data/nodes.dmp > .tree_data/parent.txt
-awk '{print $5}' .tree_data/nodes.dmp > .tree_data/class.txt
+# Fields are tab-pipe-tab separated; ranks like "species group" contain
+# spaces, so splitting on whitespace would read them as "species".
+awk -F '\t[|]\t' '{print $1}' .tree_data/nodes.dmp > .tree_data/child.txt
+awk -F '\t[|]\t' '{print $2}' .tree_data/nodes.dmp > .tree_data/parent.txt
+awk -F '\t[|]\t' '{print $3}' .tree_data/nodes.dmp > .tree_data/class.txt
 
 # Begin processing data into FTP links
 awk -F "\t" '$12=="Complete Genome" && $11=="latest"{print $6, $20}' .tree_data/assembly_summary.txt > .tree_data/ftpdirpaths # Preserves ID and starts printing FTP link

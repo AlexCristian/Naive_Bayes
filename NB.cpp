@@ -35,7 +35,11 @@ void NB::load(){
 
     string filename = iter->filename().native();
     string cls_s = filename.substr(0,filename.rfind('-'));
-    addClass(new Class<kmer_t>(cls_s, kmer_size, *iter));
+    Class<kmer_t>* cl = new Class<kmer_t>(cls_s, kmer_size, *iter);
+    // Catch a savedir trained with another k or counting mode up front,
+    // instead of silently scoring against mismatched k-mers.
+    cl->checkSavefileHeader(*iter);
+    addClass(cl);
   }
 }
 
@@ -57,6 +61,10 @@ Class<kmer_t>* NB::getClass(string cl_id){
     return NULL;
   }
   return classes[cl_id];
+}
+
+size_t NB::numClasses(){
+  return classes.size();
 }
 
 int NB::getKmerSize(){

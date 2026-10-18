@@ -1,43 +1,52 @@
-year = '2010'
-import numpy as np
+#! /usr/bin/env python3
+"""Per-fold accuracy from NB classify logs.
+
+For each fold, reports accuracy over all reads, accuracy over reads whose true
+class was trained on ("labeled"), and the share of such reads.
+"""
+import argparse
 import glob
-from sklearn.metrics import accuracy_score
-pref = np.zeros((5, 3))
-for ix in range(1, 6):
-    file = 'results/' + year + '_j' + str(ix) + '.txt'
-    pair = []
-    with open(file) as f:
+import os
+import re
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--year', default='2010')
+parser.add_argument('--folds', type=int, default=5)
+parser.add_argument('--results', default='results/{year}_j{fold}.txt',
+                    help='classify log per fold')
+parser.add_argument('--savedir',
+                    default='/lustre/scratch/zz374/NBC/process/temporal_data/{year}/save_{fold}',
+                    help='savedir the fold was classified against')
+args = parser.parse_args()
+
+# Matches both the old line format and the one with ", filename: ..." appended.
+RESULT = re.compile(r'^Genome with class (\S+), predicted ([^,\s]+)')
+
+pref = []
+for fold in range(1, args.folds + 1):
+    pairs = []
+    with open(args.results.format(year=args.year, fold=fold)) as f:
         for line in f:
-            if line[:6] == 'Genome':
-                label = int(line.split(' ')[3][:-1])
-                pred = int(line.split(' ')[-1])
-                pair.append((label, pred))
+            m = RESULT.match(line)
+            if m:
+                pairs.append(m.groups())
 
-    tmp = glob.glob('/lustre/scratch/zz374/NBC/process/temporal_data/' + year + '/save_' + str(ix) + '/*.dat')
-    labeled_genomes = [int(item.split('/')[9].split('-')[0]) for item in tmp]
-    labeled_genomes = set(labeled_genomes)
-    
-    data = np.zeros((len(pair), 3))
-    for i in range(len(pair)):
-        data[i, 0] = pair[i][0]
-        data[i, 1] = pair[i][1]
-        if pair[i][0] in labeled_genomes: 
-            data[i, 2] = 1
-        else:
-            data[i, 2] = 0
-    pref[ix - 1, 0] = accuracy_score(data[:, 0], data[:, 1])
-    pref[ix - 1, 1]	= accuracy_score(data[data[:, 2] == 1, 0], data[data[:, 2] == 1, 1])
-    pref[ix - 1, 2]	= data[data[:, 2] == 1].shape[0]/data.shape[0]
-    # print('overall_accuracy:', accuracy_score(data[:, 0], data[:, 1]))
-    # print('labeled_accuracy:', accuracy_score(data[data[:, 2] == 1, 0], data[data[:, 2] == 1, 1]))
-    # print('labeled__percent:', data[data[:, 2] == 1].shape[0]/data.shape[0])
+    savedir = args.savedir.format(year=args.year, fold=fold)
+    # Savefiles are named <class>-save.dat; class IDs may contain '-'.
+    labeled = {os.path.basename(p).rsplit('-', 1)[0]
+               for p in glob.glob(os.path.join(savedir, '*.dat'))}
+
+    known = [(t, p) for t, p in pairs if t in labeled]
+    overall = sum(t == p for t, p in pairs) / len(pairs)
+    labeled_acc = sum(t == p for t, p in known) / len(known) if known else float('nan')
+    pref.append((overall, labeled_acc, len(known) / len(pairs)))
+
 print('overall_accuracy:')
-for i in range(5):
-    print(pref[i, 0])
+for overall, _, _ in pref:
+    print(overall)
 print('labeled__percent:')
-for i in range(5):
-    print(pref[i, 2])
+for _, _, share in pref:
+    print(share)
 print('labeled_accuracy:')
-for i in range(5):
-    print(pref[i, 1])
-
+for _, labeled_acc, _ in pref:
+    print(labeled_acc)

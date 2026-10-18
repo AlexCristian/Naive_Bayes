@@ -71,6 +71,11 @@ public:
     void addClass(Class<kmer_t>* cl);
 
     /**
+     * @return The number of classes known to the classifier.
+     */
+    size_t numClasses();
+
+    /**
      * Looks up a class in the classifier by its ID.
      * @param cl_id Unique class ID.
      */
