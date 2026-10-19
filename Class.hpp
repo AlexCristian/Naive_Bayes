@@ -209,7 +209,7 @@ public:
     static void setIoSlots(int slots);
 
     /** Savefile format written by this build. */
-    static const int SAVEFILE_VERSION = 3;
+    static const int SAVEFILE_VERSION = 4;
 
 protected:
   bool isLoaded = false;
@@ -255,6 +255,8 @@ protected:
 
   void readTextBody(std::istream& in, bool legacy);
   void readBinaryBody(std::istream& in);
+  void readCompactBody(std::istream& in);
+  void readGenomeNames(std::istream& in);
 
   [[noreturn]] void savefileError(path file, string what);
 

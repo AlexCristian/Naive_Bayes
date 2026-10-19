@@ -10,6 +10,22 @@ mkdata(){ # dir nclass ngen len k
 # Savefile reader for formats 1-3 (helpers below print fields from it).
 SAVEPY='
 import struct,sys
+def v4body(d,o):
+    import struct
+    ng,sf,n,nd=struct.unpack_from("<QQQQ",d,o); o+=32
+    dic=struct.unpack_from("<%dQ"%nd,d,o); o+=8*nd
+    w=d[o]; o+=1; (kb,)=struct.unpack_from("<Q",d,o); o+=8
+    ks=[]; prev=0; p=o; e=o+kb
+    while p<e:
+        g=0; sh=0
+        while True:
+            b=d[p]; p+=1; g|=(b&0x7f)<<sh
+            if not b&0x80: break
+            sh+=7
+        prev+=g; ks.append(prev)
+    o=e; vs=[dic[int.from_bytes(d[o+i*w:o+(i+1)*w],"little")] for i in range(n)]; o+=n*w
+    (m,)=struct.unpack_from("<Q",d,o); o+=8
+    return ng,sf,ks,vs,sorted(d[o:].decode().split("\n")[:m])
 def read(p):
     d=open(p,"rb").read()
     if not d.startswith(b"NBSAVE"):                       # format 1 (text, no header)
@@ -19,6 +35,8 @@ def read(p):
     if ver==2:
         t=d[nl+1:].split(); n=int(t[2]); kv=sorted((int(t[3+2*i]),int(t[4+2*i])) for i in range(n))
         return int(t[0]),int(t[1]),kv,sorted(x.decode() for x in t[3+2*n+2:])
+    if ver==4:
+        ng,sf,ks,vs,names=v4body(d,nl+1); return ng,sf,list(zip(ks,vs)),names
     o=nl+1; ng,sf,n=struct.unpack_from("<QQQ",d,o); o+=24
     ks=struct.unpack_from("<%dQ"%n,d,o); o+=8*n; vs=struct.unpack_from("<%dQ"%n,d,o); o+=8*n
     (m,)=struct.unpack_from("<Q",d,o); o+=8
@@ -78,7 +96,7 @@ check "k=20 no collision" "$($BIN classify q7 -s s7 -k 20 | grep -o 'predicted [
 
 if [ "${NEW_CHECKS:-1}" == "1" ]; then
 # 8: savefile carries a header and no temp files are left behind
-check "savefile header" "$(head -c 13 s2/C1-save.dat)" "NBSAVE 3 5 1"
+check "savefile header" "$(head -c 13 s2/C1-save.dat)" "NBSAVE 4 5 1"
 check "no leftover tmp" "$(ls s2 | grep -c tmp)" 0
 
 # 9: truncated savefile is an error, not a silently smaller model

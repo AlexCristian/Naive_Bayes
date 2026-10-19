@@ -401,7 +401,7 @@ void Class<T>::checkSavefileHeader(path source_path){
   if(!(in>>version>>k>>canonical)){
     savefileError(source_path, "corrupt header");
   }
-  if(version != 2 && version != SAVEFILE_VERSION){
+  if(version < 2 || version > SAVEFILE_VERSION){
     savefileError(source_path, "unsupported format version "
                   + to_string(version));
   }
@@ -457,7 +457,7 @@ void Class<T>::load(path source_path){
 
   int version, k, canonical;
   in>>version>>k>>canonical;
-  if(!in || (version != 2 && version != SAVEFILE_VERSION) || k != kmerSize
+  if(!in || version < 2 || version > SAVEFILE_VERSION || k != kmerSize
      || (canonical != 0) != CANONICAL_KMERS){
     // checkSavefileHeader() reports mismatches with a clear message.
     checkSavefileHeader(source_path);
@@ -465,7 +465,9 @@ void Class<T>::load(path source_path){
   }
   string rest;
   getline(in, rest); // end of the header line
-  if(version == SAVEFILE_VERSION){
+  if(version == 4){
+    readCompactBody(in);
+  }else if(version == 3){
     readBinaryBody(in);
   }else{
     readTextBody(in, false);
@@ -547,6 +549,11 @@ void Class<T>::readBinaryBody(std::istream& in){
     savefileError(savefile, "truncated or corrupt (k-mer table)");
   }
 
+  readGenomeNames(in);
+}
+
+template <class T>
+void Class<T>::readGenomeNames(std::istream& in){
   uint64_t m;
   in.read((char*)&m, sizeof(m));
   if(!in){
@@ -560,6 +567,68 @@ void Class<T>::readBinaryBody(std::istream& in){
     }
     trainedGenomes.insert(name);
   }
+}
+
+template <class T>
+void Class<T>::readCompactBody(std::istream& in){
+  // See save() for the layout.
+  double ngenomes_v, sumfreq_v;
+  uint64_t n, ndict, key_bytes;
+  uint8_t width;
+  in.read((char*)&ngenomes_v, sizeof(ngenomes_v));
+  in.read((char*)&sumfreq_v, sizeof(sumfreq_v));
+  in.read((char*)&n, sizeof(n));
+  in.read((char*)&ndict, sizeof(ndict));
+  if(!in || ndict > n + 1){
+    savefileError(savefile, "truncated or corrupt (header values)");
+  }
+  ngenomes_lg = make_pair(ngenomes_v, true);
+  sumfreq_lg = make_pair(sumfreq_v, true);
+
+  vector<double> dict(ndict);
+  in.read((char*)dict.data(), ndict * sizeof(double));
+  in.read((char*)&width, sizeof(width));
+  in.read((char*)&key_bytes, sizeof(key_bytes));
+  if(!in || (width != 1 && width != 2 && width != 4)){
+    savefileError(savefile, "truncated or corrupt (value table)");
+  }
+  vector<unsigned char> keys(key_bytes);
+  in.read((char*)keys.data(), key_bytes);
+  vector<unsigned char> idx(n * width);
+  in.read((char*)idx.data(), n * width);
+  if(!in){
+    savefileError(savefile, "truncated or corrupt (k-mer table)");
+  }
+
+  kmers.resize(n);
+  freqcnt_lg.resize(n);
+  const unsigned char *p = keys.data(), *end = p + key_bytes;
+  T prev = 0;
+  for(uint64_t i = 0; i < n; i++){
+    // Gap to the previous k-mer, 7 bits per byte, low bits first.
+    T gap = 0;
+    int shift = 0;
+    while(true){
+      if(p == end || shift > 63){
+        savefileError(savefile, "truncated or corrupt (k-mer stream)");
+      }
+      unsigned char b = *p++;
+      gap |= (T)(b & 0x7f) << shift;
+      if(!(b & 0x80)){
+        break;
+      }
+      shift += 7;
+    }
+    prev += gap;
+    kmers[i] = prev;
+    uint32_t j = 0;
+    memcpy(&j, &idx[i * width], width); // little-endian
+    if(j >= ndict){
+      savefileError(savefile, "truncated or corrupt (value index)");
+    }
+    freqcnt_lg[i] = dict[j];
+  }
+  readGenomeNames(in);
 }
 
 template <class T>
@@ -585,16 +654,58 @@ void Class<T>::save(path destination_path){
   }
 
   /*
-   * Savefile format (version 3):
+   * Savefile format (version 4):
    * NBSAVE <version> <k-mer size> <canonical 0/1>\n      (text)
-   * ngenomes_lg sumfreq_lg n                             (double, double, uint64)
-   * kmers[n] (sorted)  freqcnt_lg[n]                     (k-mer type, double)
+   * ngenomes_lg sumfreq_lg n ndict                       (double, double, uint64, uint64)
+   * dict[ndict]                                          (double: distinct log counts)
+   * width key_bytes                                      (uint8: 1, 2 or 4; uint64)
+   * key stream: gap from the previous k-mer, 7 bits per byte, low first
+   * index[n]: position of each k-mer's log count in dict (width bytes each)
    * m, then m genome file names, one per line
-   * Binary fields use the machine's byte order (little-endian on x86/ARM).
+   * Binary fields are little-endian (the machine's order on x86/ARM).
+   * Version 3 (still readable) stored kmers[n] and freqcnt_lg[n] raw.
    *
    * Written to a temp file and renamed over the old savefile, so a crash or
    * full disk mid-write never leaves a truncated savefile behind.
    */
+  // Encode before taking an I/O slot, so only the write waits on the disk.
+  // K-mers are sorted, so each is stored as its gap to the previous one, 7
+  // bits per byte. Log counts take few distinct values (one per total
+  // count), so each is stored as an index into a table of exact doubles.
+  vector<unsigned char> keys;
+  keys.reserve(n * 3);
+  vector<double> dict;
+  vector<uint32_t> idx;
+  idx.reserve(n);
+  {
+    unordered_map<uint64_t, uint32_t> where;
+    T prev = 0;
+    for(size_t r = 0; r < newKmers.size(); r++){
+      for(size_t i = 0; i < newKmers[r].size(); i++){
+        T gap = newKmers[r][i] - prev;
+        prev = newKmers[r][i];
+        while(gap >= 0x80){
+          keys.push_back((unsigned char)(gap | 0x80));
+          gap >>= 7;
+        }
+        keys.push_back((unsigned char)gap);
+        uint64_t bits = serializeDouble(newFreqcnt_lg[r][i]);
+        typename unordered_map<uint64_t, uint32_t>::iterator it = where.find(bits);
+        if(it == where.end()){
+          it = where.insert(make_pair(bits, (uint32_t)dict.size())).first;
+          dict.push_back(newFreqcnt_lg[r][i]);
+        }
+        idx.push_back(it->second);
+      }
+    }
+  }
+  uint8_t width = dict.size() <= 256 ? 1 : (dict.size() <= 65536 ? 2 : 4);
+  vector<unsigned char> idx_bytes(idx.size() * width);
+  for(size_t i = 0; i < idx.size(); i++){
+    memcpy(&idx_bytes[i * width], &idx[i], width); // little-endian
+  }
+  uint64_t ndict = dict.size(), key_bytes = keys.size();
+
   path tmp_path = path(destination_path.native() + ".tmp");
   {
     IoSlot slot;
@@ -603,15 +714,12 @@ void Class<T>::save(path destination_path){
     out.write((const char*)&ngenomes_v, sizeof(ngenomes_v));
     out.write((const char*)&sumfreq_v, sizeof(sumfreq_v));
     out.write((const char*)&n, sizeof(n));
-    // Ranges are in k-mer order, so writing them one after another gives the
-    // whole sorted array.
-    for(size_t r = 0; r < newKmers.size(); r++){
-      out.write((const char*)newKmers[r].data(), newKmers[r].size() * sizeof(T));
-    }
-    for(size_t r = 0; r < newFreqcnt_lg.size(); r++){
-      out.write((const char*)newFreqcnt_lg[r].data(),
-                newFreqcnt_lg[r].size() * sizeof(double));
-    }
+    out.write((const char*)&ndict, sizeof(ndict));
+    out.write((const char*)dict.data(), ndict * sizeof(double));
+    out.write((const char*)&width, sizeof(width));
+    out.write((const char*)&key_bytes, sizeof(key_bytes));
+    out.write((const char*)keys.data(), key_bytes);
+    out.write((const char*)idx_bytes.data(), idx_bytes.size());
     out.write((const char*)&m, sizeof(m));
     for(typename unordered_set<string>::iterator iter = trainedGenomes.begin();
       iter != trainedGenomes.end(); iter++){
