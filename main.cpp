@@ -244,6 +244,7 @@ int main(int argc, char* argv[]){
   string kmer_ext, srcdir, mode, savedir;
   bool print_posterior, canonical, no_prior;
   uint64_t workmem;
+  int io_threads;
 
   p_opt::options_description generic("Generic options");
   generic.add_options()
@@ -282,6 +283,9 @@ Sets the vocabulary size used for smoothing; must match how counts were made.")
             "Memory (MB) that classes being trained or classified may hold at \
 once. Threads share classes, so this doesn't grow with -t; classes are \
 opened largest first while they fit.")
+    ("io-threads", p_opt::value<int>(&io_threads)->default_value(0),
+            "How many savefiles may be read or written at once (0: no limit). \
+Set 1 or 2 when savefiles are on a spinning disk.")
     ("no-prior", p_opt::bool_switch(&no_prior),
             "Score classes by likelihood alone, without the prior that favors \
 classes trained on more genomes.")
@@ -322,6 +326,7 @@ classes trained on more genomes.")
   Genome::KMER_SIZE = kmersize;
   Genome::USE_PRIOR = !no_prior;
   Class<kmer_t>::CANONICAL_KMERS = canonical;
+  Class<kmer_t>::setIoSlots(io_threads);
 
   if(mode.compare("convert") == 0){
     savedir = srcdir;

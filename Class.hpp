@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
 #include <boost/filesystem.hpp>
 using namespace boost::filesystem;
 using namespace std;
@@ -199,6 +200,14 @@ public:
      */
     static double vocabularySize(int kmer_size);
 
+    /**
+     * How many savefiles may be read or written at once (0: no limit). On a
+     * spinning disk, several threads streaming different files at once make
+     * it seek between them; one or two streams keep it reading sequentially
+     * while other threads compute.
+     */
+    static void setIoSlots(int slots);
+
     /** Savefile format written by this build. */
     static const int SAVEFILE_VERSION = 3;
 
@@ -248,6 +257,15 @@ protected:
   void readBinaryBody(std::istream& in);
 
   [[noreturn]] void savefileError(path file, string what);
+
+  // Counting semaphore limiting concurrent savefile reads/writes.
+  struct IoSlot {
+    IoSlot();
+    ~IoSlot();
+  };
+  static int io_slots, io_busy;
+  static mutex io_lock;
+  static condition_variable io_free;
   static uint64_t serializeDouble(double value);
   static double deserializeDouble(uint64_t value);
   static double logAdd(double a, double b);

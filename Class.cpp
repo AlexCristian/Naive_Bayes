@@ -13,6 +13,32 @@
 template <class T>
 bool Class<T>::CANONICAL_KMERS = true;
 
+template <class T> int Class<T>::io_slots = 0;
+template <class T> int Class<T>::io_busy = 0;
+template <class T> mutex Class<T>::io_lock;
+template <class T> condition_variable Class<T>::io_free;
+
+template <class T>
+void Class<T>::setIoSlots(int slots){
+  io_slots = slots;
+}
+
+template <class T>
+Class<T>::IoSlot::IoSlot(){
+  unique_lock<mutex> lk(io_lock);
+  io_free.wait(lk, [](){ return io_slots <= 0 || io_busy < io_slots; });
+  io_busy++;
+}
+
+template <class T>
+Class<T>::IoSlot::~IoSlot(){
+  {
+    lock_guard<mutex> lk(io_lock);
+    io_busy--;
+  }
+  io_free.notify_one();
+}
+
 template <class T>
 double Class<T>::vocabularySize(int kmer_size){
   double all = pow(4.0, kmer_size);
@@ -406,6 +432,7 @@ void Class<T>::load(path source_path){
   if(!exists(source_path)){
     return;
   }
+  IoSlot slot;
   std::ifstream in(source_path.native(), ios::binary);
   if(!in.good()){
     savefileError(source_path, "cannot open for reading");
@@ -570,6 +597,7 @@ void Class<T>::save(path destination_path){
    */
   path tmp_path = path(destination_path.native() + ".tmp");
   {
+    IoSlot slot;
     std::ofstream out(tmp_path.native(), ios::binary);
     out<<"NBSAVE "<<SAVEFILE_VERSION<<" "<<kmerSize<<" "<<CANONICAL_KMERS<<"\n";
     out.write((const char*)&ngenomes_v, sizeof(ngenomes_v));
