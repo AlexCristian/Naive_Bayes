@@ -285,7 +285,8 @@ once. Threads share classes, so this doesn't grow with -t; classes are \
 opened largest first while they fit.")
     ("io-threads", p_opt::value<int>(&io_threads)->default_value(0),
             "How many savefiles may be read or written at once (0: no limit). \
-Set 1 or 2 when savefiles are on a spinning disk.")
+Can reduce seeking when large savefiles share a spinning disk; measure \
+before relying on it.")
     ("no-prior", p_opt::bool_switch(&no_prior),
             "Score classes by likelihood alone, without the prior that favors \
 classes trained on more genomes.")

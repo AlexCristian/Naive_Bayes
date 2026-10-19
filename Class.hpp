@@ -202,9 +202,9 @@ public:
 
     /**
      * How many savefiles may be read or written at once (0: no limit). On a
-     * spinning disk, several threads streaming different files at once make
-     * it seek between them; one or two streams keep it reading sequentially
-     * while other threads compute.
+     * spinning disk, several threads streaming different large files at once
+     * make it seek between them; fewer streams can keep it reading
+     * sequentially while other threads compute.
      */
     static void setIoSlots(int slots);
 
