@@ -139,6 +139,12 @@ public:
    * length abort the program instead of being silently mis-encoded.
    */
   static unsigned int KMER_SIZE;
+
+  /**
+   * Whether scores include the class prior, log(1 + number of training
+   * genomes in the class). On by default.
+   */
+  static bool USE_PRIOR;
 protected:
   atomic<bool> kmersLoaded{false};
   bool sequenceLoaded = false;

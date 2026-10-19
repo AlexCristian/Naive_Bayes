@@ -241,7 +241,7 @@ int main(int argc, char* argv[]){
   unsigned int nbatch, nthreads, kmersize;
   uint64_t memLimit;
   string kmer_ext, srcdir, mode, savedir;
-  bool print_posterior, canonical;
+  bool print_posterior, canonical, no_prior;
 
   p_opt::options_description generic("Generic options");
   generic.add_options()
@@ -276,6 +276,9 @@ flag increases the classifier's memory usage and is not compatible with the memo
     ("canonical,c", p_opt::value<bool>(&canonical)->default_value(true),
             "Whether k-mer count files hold canonical k-mers (jellyfish -C). \
 Sets the vocabulary size used for smoothing; must match how counts were made.")
+    ("no-prior", p_opt::bool_switch(&no_prior),
+            "Score classes by likelihood alone, without the prior that favors \
+classes trained on more genomes.")
   ;
   
   p_opt::positional_options_description pos_args;
@@ -311,6 +314,7 @@ Sets the vocabulary size used for smoothing; must match how counts were made.")
     return 1;
   }
   Genome::KMER_SIZE = kmersize;
+  Genome::USE_PRIOR = !no_prior;
   Class<kmer_t>::CANONICAL_KMERS = canonical;
 
   bool training = mode.compare("train") == 0 || mode.compare("benchmark") == 0;

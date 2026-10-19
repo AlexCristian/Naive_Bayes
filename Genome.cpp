@@ -11,6 +11,7 @@
 
 bool Genome::STORE_ALL_NUMERATORS = false;
 unsigned int Genome::KMER_SIZE = 0;
+bool Genome::USE_PRIOR = true;
 
 bool Genome::ScoreLess::operator()(const score& a, const score& b) const {
   if(a.first != b.first){
@@ -131,7 +132,9 @@ string& Genome::getSequence(){
 void Genome::computeClassificationNumerator(Class<kmer_t>* cl){
   accumulator_set<double, features<tag::sum_kahan> > current, sumfrq;
   
-  current(cl->getNGenomes_lg());
+  if(USE_PRIOR){
+    current(cl->getNGenomes_lg());
+  }
   ostringstream strs;
   if(NB::debug_flag == NB::Debug::LOG_ALL){
     strs<<"("<<cl->getId()<<"): "<<sum_kahan(current);

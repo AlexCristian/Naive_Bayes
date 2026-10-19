@@ -88,6 +88,15 @@ cp -r s2 s12; $BIN train d2 -s s12 -k 5 -m 10 > l12.txt
 check "retrain skips trained genomes" "$(ngen s12/C1-save.dat):$(grep -c Skipping l12.txt)" "3:6"
 check "retrain leaves model unchanged" "$(cmp -s <(body s2/C1-save.dat | tr ' ' '\n' | sort) <(body s12/C1-save.dat | tr ' ' '\n' | sort) && echo same)" same
 
+# 14: --no-prior drops the prior term. Small (1 genome) has a slightly higher
+# likelihood for the query; Big (2 genomes) only wins through its prior.
+mkdir -p d14/Big d14/Small q14/Small
+printf "AAAAA 1\n" > d14/Big/g1.kmr; printf "CCCCC 1\n" > d14/Big/g2.kmr; printf "AAAAA 1\n" > d14/Small/g1.kmr
+printf "AAAAA 1\n" > q14/Small/r.kmr
+$BIN train d14 -s s14 -k 5 > /dev/null
+check "prior favors bigger class" "$($BIN classify q14 -s s14 -k 5 | grep -o 'predicted [A-Za-z]*')" "predicted Big"
+check "--no-prior removes it" "$($BIN classify q14 -s s14 -k 5 --no-prior | grep -o 'predicted [A-Za-z]*')" "predicted Small"
+
 # 13: legacy (format 1) savefiles still load, with a warning
 if [ -n "${LEGACY_BIN:-}" ]; then
   $LEGACY_BIN train d2 -s s13 -k 5 > /dev/null
