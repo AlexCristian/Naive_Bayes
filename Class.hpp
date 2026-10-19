@@ -23,6 +23,8 @@
 #include <string>
 #include <atomic>
 #include <algorithm>
+#include <memory>
+#include <mutex>
 #include <boost/filesystem.hpp>
 using namespace boost::filesystem;
 using namespace std;
@@ -98,10 +100,54 @@ public:
     void lookupFreqCounts_lg(const vector<T>& kmers, vector<double>& out);
 
     /**
-     * Adds a genome's k-mer counts to the class.
-     * @param genome The genome to be added to the class.
+     * Like lookupFreqCounts_lg(), for the slice [qlo, qhi) of the query list
+     * only, writing out[qlo..qhi). Threads may run disjoint slices at once.
      */
-    void addGenome(Genome* genome);
+    void lookupFreqCounts_lg(const vector<T>& kmers, size_t qlo, size_t qhi,
+                             vector<double>& out);
+
+    /*
+     * Parallel training of a loaded class:
+     *   takeGenomesToTrain()      (one thread)
+     *   beginUpdate(R, sample)    (one thread)
+     *   addGenomeCounts(run)      (any threads, once per genome)
+     *   commitRange(r)            (any threads, once per r in [0, R))
+     *   save()                    (one thread)
+     * Counts are split by k-mer range, so threads never touch the same
+     * k-mer, and the saved values are bit-identical to adding the genomes
+     * one at a time.
+     */
+
+    /**
+     * Removes the queued genomes and returns those not yet trained into the
+     * class, recording their names. Already-trained ones are skipped.
+     */
+    vector<Genome*> takeGenomesToTrain();
+
+    /**
+     * Splits the k-mer space into R ranges of about equal size, using the
+     * class's own k-mers or, for a new class, a sample genome's.
+     */
+    void beginUpdate(size_t R, const vector<pair<T, int> >* sample);
+
+    /**
+     * Adds one genome's sorted k-mer counts. Thread-safe.
+     */
+    void addGenomeCounts(const vector<pair<T, int> >& counts);
+
+    /**
+     * Folds range r's new counts into the class. Thread-safe for distinct r.
+     */
+    void commitRange(size_t r);
+
+    /** @return Number of k-mer ranges set by beginUpdate(). */
+    size_t numRanges(){ return pendingRanges.size(); }
+
+    /** @return Number of k-mers in the class. */
+    size_t numKmers();
+
+    /** @return Total size in bytes of the queued genomes' k-mer files. */
+    uint64_t queuedBytes();
 
     /**
      * Queues a genome to be added to this class.
@@ -180,13 +226,20 @@ protected:
   vector<T> kmers;
   vector<double> freqcnt_lg;
 
-  // K-mer counts added since loading, sorted by k-mer, not yet folded into
-  // freqcnt_lg.
-  vector<pair<T, int> > pending;
+  // Parallel update state (see beginUpdate()): range boundaries, the new
+  // counts per range, a lock per range, and the committed result per range.
+  vector<T> splitters;
+  vector<vector<pair<T, int> > > pendingRanges;
+  unique_ptr<mutex[]> rangeLocks;
+  vector<vector<T> > newKmers;
+  vector<vector<double> > newFreqcnt_lg;
+  atomic<int> addedGenomes{0};
+  atomic<long long> addedSum{0};
+  bool updating = false;
 
   void addNGenomes(int ngenomes_);
   void addSumfreq(long long int sumfreq_);
-  void foldInPending();
+  size_t rangeStart(const vector<T>& sorted, size_t r);
 
   void readTextBody(std::istream& in, bool legacy);
   void readBinaryBody(std::istream& in);

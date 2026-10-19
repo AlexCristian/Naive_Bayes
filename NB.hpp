@@ -22,6 +22,7 @@
 #include "Genome.hpp"
 #include "Class.hpp"
 #include "Diskutil.hpp"
+#include "TaskPool.hpp"
 using namespace std;
 
 template <class T>
@@ -109,6 +110,12 @@ public:
     void processClassUpdates();
 
     /**
+     * Sets how much memory (bytes) classes being trained or classified may
+     * hold at once. Classes are opened largest first while they fit.
+     */
+    void setWorkMemory(uint64_t bytes);
+
+    /**
      * Given an array of reads, classifies them into available classes and
      * computes membership likelihood for each.
      * @param reads Array of reads to be classified.
@@ -139,10 +146,11 @@ protected:
     mutex classQueueAccess;
 
     static int min(int a, int b, int c);
-    void classifyThreadController(vector<Genome*>& reads,
-                                  const vector<kmer_t>& batch_kmers);
+    uint64_t work_memory = 8ULL << 30;
+
     void forEachRead(vector<Genome*>& reads, function<void(Genome*)> fn);
-    void trainThreadController();
+    int splitCount(size_t items, size_t per_task);
+    void trainClass(Class<kmer_t>* cl, uint64_t bytes, TaskPool& pool);
 };
 
 #endif /* NB_hpp */

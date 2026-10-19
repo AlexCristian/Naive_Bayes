@@ -95,6 +95,26 @@ void NB::queueAllClassesForUpdate(){
     }
 }
 
+void NB::setWorkMemory(uint64_t bytes){
+  work_memory = bytes;
+}
+
+int NB::splitCount(size_t items, size_t per_task){
+  // Enough tasks to keep every thread busy (a few per thread, to even out
+  // uneven pieces), but none smaller than per_task items.
+  size_t n = items / per_task;
+  size_t most = 4 * (size_t)std::max(nthreads, 1);
+  return (int)std::max((size_t)1, std::min(n, most));
+}
+
+/*
+ * Training runs on a task pool. Each class in the batch is a job:
+ *   load the class -> parse each new genome (one task per genome) ->
+ *   commit each k-mer range (one task per range) -> save and unload.
+ * Idle threads open the next job, largest first, while the memory budget
+ * allows, so big classes are split across all threads and small ones fill
+ * the gaps. The saved values don't depend on the order tasks run in.
+ */
 void NB::processClassUpdates(){
   progress = 1;
   total = classesToProcess.size();
@@ -104,84 +124,108 @@ void NB::processClassUpdates(){
     cout.flush();
   }
 
-  int c_nthreads = nthreads;
-  if(nthreads > classes.size()){
-    c_nthreads = classes.size();
-  }
-
-  vector<thread*> workers(c_nthreads);
-  for(int i=0; i < c_nthreads; i++){
-    workers[i] = new thread(&NB::trainThreadController, this);
-  }
-  for(int i=0; i < c_nthreads; i++){
-    workers[i]->join();
-    delete workers[i];
+  struct Job {
+    Class<kmer_t>* cl;
+    uint64_t work, bytes;
+  };
+  vector<Job> jobs;
+  while(!classesToProcess.empty()){
+    Class<kmer_t>* cl = classesToProcess.front();
+    classesToProcess.pop();
+    uint64_t saved = 0, genome_bytes = cl->queuedBytes();
+    boost::system::error_code ec;
+    uintmax_t size = file_size(cl->getSavefilePath(), ec);
+    if(!ec){
+      saved = size;
+    }
+    // In memory: the class twice during the commit (old and new arrays),
+    // plus the new counts, at ~16 bytes per k-mer against ~(k + 4) bytes
+    // per line of k-mer file.
+    uint64_t new_kmer_bytes = genome_bytes / (kmer_size + 4) * 16;
+    jobs.push_back({cl, saved + genome_bytes, 2 * saved + new_kmer_bytes + 1});
   }
   classesQueuedForUpdate.clear();
+  sort(jobs.begin(), jobs.end(),
+       [](const Job& a, const Job& b){ return a.work > b.work; });
+
+  TaskPool pool(nthreads, work_memory);
+  size_t next = 0;
+  pool.run(
+    [&](){ return next < jobs.size() ? jobs[next].bytes : 0; },
+    [&](uint64_t& bytes) -> function<void()> {
+      if(next >= jobs.size()){
+        return function<void()>();
+      }
+      Job job = jobs[next++];
+      bytes = job.bytes;
+      if(NB::debug_flag == NB::Debug::LOG_SOME
+         || NB::debug_flag == NB::Debug::LOG_ALL){
+        cout<<"("<<progress++<<"/"<<total<<") Training genomes for class ";
+        cout<<job.cl->getId()<<"\n";
+        cout.flush();
+      }
+      return [this, job, &pool](){ trainClass(job.cl, job.bytes, pool); };
+    });
 }
 
-void NB::trainThreadController(){
-  bool exitCondition = false;
-  while(!exitCondition){
-    classQueueAccess.lock();
-    if(classesToProcess.empty()){
-      exitCondition = true;
-      classQueueAccess.unlock();
-      continue;
-    }
+void NB::trainClass(Class<kmer_t>* cl, uint64_t bytes, TaskPool& pool){
+  cl->load();
+  vector<Genome*> todo = cl->takeGenomesToTrain();
 
-    Class<kmer_t>* cl = classesToProcess.front();
-    classesToProcess.pop();
-
-    if(NB::debug_flag == NB::Debug::LOG_SOME
-       || NB::debug_flag == NB::Debug::LOG_ALL){
-      cout<<"("<<progress++<<"/"<<total<<") Training genomes for class ";
-      cout<<cl->getId()<<"\n";
-      cout.flush();
-    }
-    classQueueAccess.unlock();
-
-    if(cl->loaded()) {
-      cout<<"Attempted double-load for Class " << cl->getId()<<"\n";
-    } else {
-      cl->load();
-      cl->addGenomesInQueue();
-      cl->save();
-      cl->unload();
+  uint64_t genome_bytes = 0;
+  for(size_t i = 0; i < todo.size(); i++){
+    boost::system::error_code ec;
+    uintmax_t size = file_size(todo[i]->getKmrPath(), ec);
+    if(!ec){
+      genome_bytes += size;
     }
   }
-}
+  size_t estimate = cl->numKmers() + genome_bytes / (kmer_size + 4);
+  size_t R = splitCount(estimate, 1 << 20);
 
-void NB::classifyThreadController(vector<Genome*>& reads,
-                                  const vector<kmer_t>& batch_kmers){
-  vector<double> batch_lg;
-  bool exitCondition = false;
-  while(!exitCondition){
-    classQueueAccess.lock();
-    if(classesToProcess.empty()){
-      exitCondition = true;
-      classQueueAccess.unlock();
-      continue;
+  // A new class has no k-mers to split on yet: parse one genome first and
+  // split on its k-mers instead.
+  shared_ptr<vector<Genome*> > rest = make_shared<vector<Genome*> >(todo);
+  if(cl->numKmers() < R && !rest->empty()){
+    vector<pair<kmer_t, int> > sample;
+    rest->front()->loadSortedKmerCounts(sample);
+    cl->beginUpdate(R, &sample);
+    cl->addGenomeCounts(sample);
+    rest->erase(rest->begin());
+  }else{
+    cl->beginUpdate(R, NULL);
+  }
+
+  auto commit = [cl, bytes, &pool](){
+    size_t ranges = cl->numRanges();
+    shared_ptr<atomic<size_t> > left = make_shared<atomic<size_t> >(ranges);
+    for(size_t r = 0; r < ranges; r++){
+      pool.submit([cl, r, left, bytes, &pool](){
+        cl->commitRange(r);
+        if(--(*left) == 0){
+          cl->save();
+          cl->unload();
+          pool.release(bytes);
+        }
+      });
     }
+  };
 
-    Class<kmer_t>* cl = classesToProcess.front();
-    classesToProcess.pop();
-
-    if(NB::debug_flag == NB::Debug::LOG_SOME){
-      cout<<"("<<progress++<<"/"<<total<<") Computing confidence for class ";
-      cout<<cl->getId()<<"\n";
-      cout.flush();
-    }
-    classQueueAccess.unlock();
-
-    cl->load();
-    // One pass over the class's sorted k-mers serves every read in the batch.
-    cl->lookupFreqCounts_lg(batch_kmers, batch_lg);
-    for(vector<Genome*>::iterator iter = reads.begin();
-      iter != reads.end(); iter++){
-        (*iter)->scoreClass(cl, batch_lg);
+  if(rest->empty()){
+    commit();
+    return;
+  }
+  shared_ptr<atomic<size_t> > left = make_shared<atomic<size_t> >(rest->size());
+  for(size_t i = 0; i < rest->size(); i++){
+    Genome* g = (*rest)[i];
+    pool.submit([cl, g, left, commit](){
+      vector<pair<kmer_t, int> > counts;
+      g->loadSortedKmerCounts(counts);
+      cl->addGenomeCounts(counts);
+      if(--(*left) == 0){
+        commit();
       }
-    cl->unload();
+    });
   }
 }
 
@@ -200,6 +244,15 @@ void NB::forEachRead(vector<Genome*>& reads, function<void(Genome*)> fn){
   }
 }
 
+/*
+ * Classification runs on the same kind of task pool. Each class is a job:
+ *   load the class -> look up its log counts for slices of the batch's
+ *   k-mer list (one task per slice) -> score chunks of reads (one task per
+ *   chunk) -> unload.
+ * Every thread can work on the same loaded class, because nothing in it
+ * changes while classifying. Each read is still summed in the same order,
+ * so scores are the same as before.
+ */
 void NB::classify(vector<Genome*> reads){
   progress = 1;
   total = classes.size();
@@ -213,7 +266,8 @@ void NB::classify(vector<Genome*> reads){
   // Load every read once, then list the batch's distinct k-mers (sorted) and
   // point each read's k-mers into that list.
   forEachRead(reads, [](Genome* g){ g->getKmerCounts(); });
-  vector<kmer_t> batch_kmers;
+  shared_ptr<vector<kmer_t> > batch = make_shared<vector<kmer_t> >();
+  vector<kmer_t>& batch_kmers = *batch;
   for(vector<Genome*>::iterator iter = reads.begin();
     iter != reads.end(); iter++){
       unordered_map<kmer_t, int>& counts = (*iter)->getKmerCounts();
@@ -227,25 +281,73 @@ void NB::classify(vector<Genome*> reads){
                     batch_kmers.end());
   forEachRead(reads, [&batch_kmers](Genome* g){ g->indexKmers(batch_kmers); });
 
+  struct Job {
+    Class<kmer_t>* cl;
+    uint64_t bytes;
+  };
+  vector<Job> jobs;
+  size_t B = batch_kmers.size();
   for(unordered_map<string, Class<kmer_t>* >::iterator iter = classes.begin();
     iter != classes.end(); iter++){
-      Class<kmer_t> *cl = iter->second;
-      classesToProcess.push(cl);
+      uint64_t saved = 0;
+      boost::system::error_code ec;
+      uintmax_t size = file_size(iter->second->getSavefilePath(), ec);
+      if(!ec){
+        saved = size;
+      }
+      jobs.push_back({iter->second, saved + B * sizeof(double) + 1});
     }
+  sort(jobs.begin(), jobs.end(),
+       [](const Job& a, const Job& b){ return a.bytes > b.bytes; });
 
-  int c_nthreads = nthreads;
-  if(nthreads > classes.size()){
-    c_nthreads = classes.size();
-  }
-  vector<thread*> workers(c_nthreads);
-  for(int i=0; i < c_nthreads; i++){
-    workers[i] = new thread(&NB::classifyThreadController, this, ref(reads),
-                            cref(batch_kmers));
-  }
-  for(int i=0; i < c_nthreads; i++){
-    workers[i]->join();
-    delete workers[i];
-  }
+  int slices = splitCount(B, 1 << 16);
+  int chunks = splitCount(reads.size(), 256);
+  TaskPool pool(nthreads, work_memory);
+  size_t next = 0;
+  pool.run(
+    [&](){ return next < jobs.size() ? jobs[next].bytes : 0; },
+    [&](uint64_t& bytes) -> function<void()> {
+      if(next >= jobs.size()){
+        return function<void()>();
+      }
+      Job job = jobs[next++];
+      bytes = job.bytes;
+      if(NB::debug_flag == NB::Debug::LOG_SOME){
+        cout<<"("<<progress++<<"/"<<total<<") Computing confidence for class ";
+        cout<<job.cl->getId()<<"\n";
+        cout.flush();
+      }
+      return [job, batch, &reads, slices, chunks, &pool](){
+        Class<kmer_t>* cl = job.cl;
+        cl->load();
+        size_t B = batch->size();
+        shared_ptr<vector<double> > lg = make_shared<vector<double> >(B);
+        shared_ptr<atomic<int> > lookups = make_shared<atomic<int> >(slices);
+        for(int s = 0; s < slices; s++){
+          size_t qlo = B * s / slices, qhi = B * (s + 1) / slices;
+          pool.submit([=, &reads, &pool](){
+            cl->lookupFreqCounts_lg(*batch, qlo, qhi, *lg);
+            if(--(*lookups) > 0){
+              return;
+            }
+            shared_ptr<atomic<int> > scored = make_shared<atomic<int> >(chunks);
+            for(int c = 0; c < chunks; c++){
+              size_t rlo = reads.size() * c / chunks;
+              size_t rhi = reads.size() * (c + 1) / chunks;
+              pool.submit([=, &reads, &pool](){
+                for(size_t i = rlo; i < rhi; i++){
+                  reads[i]->scoreClass(cl, *lg);
+                }
+                if(--(*scored) == 0){
+                  cl->unload();
+                  pool.release(job.bytes);
+                }
+              });
+            }
+          });
+        }
+      };
+    });
 
   for(vector<Genome*>::iterator iter = reads.begin();
     iter != reads.end(); iter++){

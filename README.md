@@ -57,7 +57,7 @@ Note that while the number of reads stays the same, their size and that of their
 The default value is -1, which disables this option.
 
 ### -t : Using the --nthreads option
-This option specifies the number of concurrent threads to run. Each thread will compute data for a separate class, so each thread will load one savefile. DNA reads/sequences will be shared across all threads.
+This option specifies the number of worker threads. Work is split into small tasks so every thread stays busy: while training, a class's new genomes are parsed in parallel and its k-mers are committed in parallel ranges; while classifying, all threads can work on the same loaded class (looking up slices of the reads' k-mers, then scoring chunks of reads). Classes are opened largest first. Results don't depend on the thread count.
 
 The default value is 1, which will run the program in single threaded mode.
 
@@ -75,6 +75,9 @@ The default value is 6, which will make the program output and expect 6-mers. Th
 Training genomes and reads must be counted the same way. The supplied Jellyfish script counts canonical k-mers (`jellyfish count -C`) for both, so a read matches its genome whichever strand it came from. This option tells NBC++ which convention the counts follow, so that Laplace smoothing uses the right number of possible k-mers: 4^k without `-C`, about half of that with it.
 
 The default value is 1 (canonical counts).
+
+### -w : Using the --workmem option
+Memory, in MB, that classes being trained or classified may hold at once (8192 by default). Because threads share classes, this doesn't grow with `-t`. A class larger than the budget still runs, on its own. This is separate from `-m`, which caps the k-mer files loaded per training batch.
 
 ### --no-prior
 By default a class's score includes a prior, log(1 + number of genomes trained into the class), which favors well-represented species. With `--no-prior` classes are scored by likelihood alone, as described in the NBC++ paper. On a RefSeq benchmark this raised species-level accuracy slightly (about +0.1 points).

@@ -8,6 +8,7 @@
 
 #include "Genome.hpp"
 #include "NB.hpp"
+#include <climits>
 
 template <class T>
 bool Class<T>::CANONICAL_KMERS = true;
@@ -64,19 +65,163 @@ void Class<T>::queueGenome(Genome* genome){
 }
 
 template <class T>
-void Class<T>::addGenomesInQueue(){
+vector<Genome*> Class<T>::takeGenomesToTrain(){
+  vector<Genome*> to_train;
   while(!queuedGenomes.empty()){
     Genome* current = queuedGenomes.front();
+    queuedGenomes.pop();
+    genomes.push_back(current); // owned by the class from here on
     string name = current->getKmrPath().filename().native();
     if(!trainedGenomes.insert(name).second){
       cout<<"Skipping "<<name<<": already trained into class "<<id<<"\n";
-      genomes.push_back(current);
     }else{
-      addGenome(current);
+      to_train.push_back(current);
     }
-    current->unload();
-    queuedGenomes.pop();
   }
+  return to_train;
+}
+
+template <class T>
+void Class<T>::addGenomesInQueue(){
+  vector<Genome*> to_train = takeGenomesToTrain();
+  vector<pair<T, int> > counts;
+  if(!to_train.empty()){
+    to_train[0]->loadSortedKmerCounts(counts);
+  }
+  beginUpdate(1, to_train.empty() ? NULL : &counts);
+  for(size_t i = 0; i < to_train.size(); i++){
+    if(i > 0){
+      to_train[i]->loadSortedKmerCounts(counts);
+    }
+    addGenomeCounts(counts);
+  }
+  commitRange(0);
+}
+
+template <class T>
+size_t Class<T>::numKmers(){
+  return kmers.size();
+}
+
+template <class T>
+uint64_t Class<T>::queuedBytes(){
+  uint64_t total = 0;
+  queue<Genome*> copy = queuedGenomes;
+  while(!copy.empty()){
+    boost::system::error_code ec;
+    uintmax_t size = file_size(copy.front()->getKmrPath(), ec);
+    if(!ec){
+      total += size;
+    }
+    copy.pop();
+  }
+  return total;
+}
+
+template <class T>
+size_t Class<T>::rangeStart(const vector<T>& sorted, size_t r){
+  // Range r holds k-mers x with splitters[r-1] <= x < splitters[r].
+  if(r == 0){
+    return 0;
+  }
+  if(r > splitters.size()){
+    return sorted.size();
+  }
+  return lower_bound(sorted.begin(), sorted.end(), splitters[r-1]) - sorted.begin();
+}
+
+template <class T>
+void Class<T>::beginUpdate(size_t R, const vector<pair<T, int> >* sample){
+  if(R < 1){
+    R = 1;
+  }
+  splitters.clear();
+  for(size_t i = 1; i < R; i++){
+    if(kmers.size() >= R){
+      splitters.push_back(kmers[i * kmers.size() / R]);
+    }else if(sample != NULL && sample->size() >= R){
+      splitters.push_back((*sample)[i * sample->size() / R].first);
+    }
+  }
+  R = splitters.size() + 1;
+  pendingRanges.assign(R, vector<pair<T, int> >());
+  rangeLocks.reset(new mutex[R]);
+  newKmers.assign(R, vector<T>());
+  newFreqcnt_lg.assign(R, vector<double>());
+  addedGenomes = 0;
+  addedSum = 0;
+  updating = true;
+}
+
+template <class T>
+void Class<T>::addGenomeCounts(const vector<pair<T, int> >& counts){
+  long long int sum = 0;
+  for(size_t i = 0; i < counts.size(); i++){
+    sum += counts[i].second;
+  }
+  size_t R = pendingRanges.size();
+  size_t lo = 0;
+  for(size_t r = 0; r < R; r++){
+    size_t hi = (r + 1 < R)
+      ? lower_bound(counts.begin(), counts.end(), make_pair(splitters[r], INT_MIN))
+        - counts.begin()
+      : counts.size();
+    if(hi > lo){
+      // Integer counts add up to the same totals in any order, so genomes
+      // can be merged in whatever order threads get to them.
+      lock_guard<mutex> guard(rangeLocks[r]);
+      vector<pair<T, int> >& pending = pendingRanges[r];
+      vector<pair<T, int> > merged;
+      merged.reserve(pending.size() + (hi - lo));
+      size_t i = 0, j = lo;
+      while(i < pending.size() || j < hi){
+        if(j == hi || (i < pending.size() && pending[i].first < counts[j].first)){
+          merged.push_back(pending[i++]);
+        }else if(i < pending.size() && pending[i].first == counts[j].first){
+          merged.push_back(make_pair(pending[i].first,
+                                     pending[i].second + counts[j].second));
+          i++; j++;
+        }else{
+          merged.push_back(counts[j++]);
+        }
+      }
+      pending.swap(merged);
+    }
+    lo = hi;
+  }
+  addedGenomes++;
+  addedSum += sum;
+}
+
+template <class T>
+void Class<T>::commitRange(size_t r){
+  // A k-mer's log count is log(1 + total count); the 1 is the smoothing
+  // pseudo-count. New counts are folded in with one logAdd per save, exactly
+  // like the original lazy update.
+  size_t i = rangeStart(kmers, r), iend = rangeStart(kmers, r + 1);
+  vector<pair<T, int> >& pending = pendingRanges[r];
+  vector<T>& out_k = newKmers[r];
+  vector<double>& out_v = newFreqcnt_lg[r];
+  out_k.reserve((iend - i) + pending.size());
+  out_v.reserve((iend - i) + pending.size());
+  size_t j = 0;
+  while(i < iend || j < pending.size()){
+    if(j == pending.size() || (i < iend && kmers[i] < pending[j].first)){
+      out_k.push_back(kmers[i]);
+      out_v.push_back(freqcnt_lg[i]);
+      i++;
+    }else{
+      double previous = 0; // log(1): the pseudo-count of an unseen k-mer
+      if(i < iend && kmers[i] == pending[j].first){
+        previous = freqcnt_lg[i];
+        i++;
+      }
+      out_k.push_back(pending[j].first);
+      out_v.push_back(logAdd(previous, log(pending[j].second)));
+      j++;
+    }
+  }
+  vector<pair<T, int> >().swap(pending);
 }
 
 template <class T>
@@ -158,98 +303,46 @@ double Class<T>::deserializeDouble(uint64_t value){
 }
 
 template <class T>
-void Class<T>::addGenome(Genome* genome){
-  addNGenomes(1);
-
-  vector<pair<T, int> > counts;
-  genome->loadSortedKmerCounts(counts);
-
-  // Merge into the pending counts (both sorted by k-mer).
-  long long int sum = 0;
-  vector<pair<T, int> > merged;
-  merged.reserve(pending.size() + counts.size());
-  size_t i = 0, j = 0;
-  while(i < pending.size() || j < counts.size()){
-    if(j == counts.size()
-       || (i < pending.size() && pending[i].first < counts[j].first)){
-      merged.push_back(pending[i++]);
-    }else{
-      sum += counts[j].second;
-      if(i < pending.size() && pending[i].first == counts[j].first){
-        merged.push_back(make_pair(pending[i].first,
-                                   pending[i].second + counts[j].second));
-        i++;
-      }else{
-        merged.push_back(counts[j]);
-      }
-      j++;
-    }
-  }
-  pending.swap(merged);
-
-  addSumfreq(sum);
-  genomes.push_back(genome);
-}
-
-template <class T>
-void Class<T>::foldInPending(){
-  if(pending.empty()){
-    return;
-  }
-  // A k-mer's log count is log(1 + total count); the 1 is the smoothing
-  // pseudo-count. New counts are folded in with one logAdd per save, exactly
-  // like the original lazy update.
-  vector<T> new_kmers;
-  vector<double> new_lg;
-  new_kmers.reserve(kmers.size() + pending.size());
-  new_lg.reserve(kmers.size() + pending.size());
-  size_t i = 0, j = 0;
-  while(i < kmers.size() || j < pending.size()){
-    if(j == pending.size()
-       || (i < kmers.size() && kmers[i] < pending[j].first)){
-      new_kmers.push_back(kmers[i]);
-      new_lg.push_back(freqcnt_lg[i]);
-      i++;
-    }else{
-      double previous = 0; // log(1): the pseudo-count of an unseen k-mer
-      if(i < kmers.size() && kmers[i] == pending[j].first){
-        previous = freqcnt_lg[i];
-        i++;
-      }
-      new_kmers.push_back(pending[j].first);
-      new_lg.push_back(logAdd(previous, log(pending[j].second)));
-      j++;
-    }
-  }
-  kmers.swap(new_kmers);
-  freqcnt_lg.swap(new_lg);
-  vector<pair<T, int> >().swap(pending);
-}
-
-template <class T>
 void Class<T>::lookupFreqCounts_lg(const vector<T>& query, vector<double>& out){
   out.assign(query.size(), 0.0);
-  size_t n = kmers.size(), q = query.size();
-  if(n == 0 || q == 0){
+  lookupFreqCounts_lg(query, 0, query.size(), out);
+}
+
+template <class T>
+void Class<T>::lookupFreqCounts_lg(const vector<T>& query, size_t qlo,
+                                   size_t qhi, vector<double>& out){
+  for(size_t j = qlo; j < qhi; j++){
+    out[j] = 0.0;
+  }
+  if(kmers.empty() || qhi <= qlo){
     return;
   }
-  // Binary-search each query k-mer when the class is much larger than the
-  // query; otherwise walk both sorted lists once.
+  // Only the part of the class between this slice's first and last k-mer
+  // can match.
+  size_t ilo = lower_bound(kmers.begin(), kmers.end(), query[qlo]) - kmers.begin();
+  size_t ihi = upper_bound(kmers.begin() + ilo, kmers.end(), query[qhi-1])
+               - kmers.begin();
+  size_t n = ihi - ilo, q = qhi - qlo;
+  if(n == 0){
+    return;
+  }
+  // Binary-search each query k-mer when that part of the class is much
+  // larger than the slice; otherwise walk both sorted lists once.
   if(q * (size_t)log2((double)n + 1) < n){
-    for(size_t j = 0; j < q; j++){
+    for(size_t j = qlo; j < qhi; j++){
       typename vector<T>::const_iterator it =
-        lower_bound(kmers.begin(), kmers.end(), query[j]);
-      if(it != kmers.end() && *it == query[j]){
+        lower_bound(kmers.begin() + ilo, kmers.begin() + ihi, query[j]);
+      if(it != kmers.begin() + ihi && *it == query[j]){
         out[j] = freqcnt_lg[it - kmers.begin()];
       }
     }
   }else{
-    size_t i = 0;
-    for(size_t j = 0; j < q && i < n; j++){
-      while(i < n && kmers[i] < query[j]){
+    size_t i = ilo;
+    for(size_t j = qlo; j < qhi && i < ihi; j++){
+      while(i < ihi && kmers[i] < query[j]){
         i++;
       }
-      if(i < n && kmers[i] == query[j]){
+      if(i < ihi && kmers[i] == query[j]){
         out[j] = freqcnt_lg[i];
       }
     }
@@ -433,9 +526,25 @@ void Class<T>::readBinaryBody(std::istream& in){
 
 template <class T>
 void Class<T>::save(path destination_path){
-  foldInPending();
+  if(updating){
+    // Same totals as adding the genomes one by one.
+    if(addedGenomes > 0){
+      addNGenomes(addedGenomes);
+      addSumfreq(addedSum);
+    }
+  }else{
+    // Nothing trained since loading: write the class as it is.
+    newKmers.assign(1, vector<T>());
+    newFreqcnt_lg.assign(1, vector<double>());
+    newKmers[0].swap(kmers);
+    newFreqcnt_lg[0].swap(freqcnt_lg);
+  }
+  updating = false;
   double ngenomes_v = getNGenomes_lg(), sumfreq_v = getSumFreq_lg();
-  uint64_t n = kmers.size(), m = trainedGenomes.size();
+  uint64_t n = 0, m = trainedGenomes.size();
+  for(size_t r = 0; r < newKmers.size(); r++){
+    n += newKmers[r].size();
+  }
 
   /*
    * Savefile format (version 3):
@@ -455,8 +564,15 @@ void Class<T>::save(path destination_path){
     out.write((const char*)&ngenomes_v, sizeof(ngenomes_v));
     out.write((const char*)&sumfreq_v, sizeof(sumfreq_v));
     out.write((const char*)&n, sizeof(n));
-    out.write((const char*)kmers.data(), n * sizeof(T));
-    out.write((const char*)freqcnt_lg.data(), n * sizeof(double));
+    // Ranges are in k-mer order, so writing them one after another gives the
+    // whole sorted array.
+    for(size_t r = 0; r < newKmers.size(); r++){
+      out.write((const char*)newKmers[r].data(), newKmers[r].size() * sizeof(T));
+    }
+    for(size_t r = 0; r < newFreqcnt_lg.size(); r++){
+      out.write((const char*)newFreqcnt_lg[r].data(),
+                newFreqcnt_lg[r].size() * sizeof(double));
+    }
     out.write((const char*)&m, sizeof(m));
     for(typename unordered_set<string>::iterator iter = trainedGenomes.begin();
       iter != trainedGenomes.end(); iter++){
@@ -473,6 +589,9 @@ void Class<T>::save(path destination_path){
   if(ec){
     savefileError(destination_path, "could not replace savefile: " + ec.message());
   }
+  // The class is unloaded after saving; drop the written arrays now.
+  vector<vector<T> >().swap(newKmers);
+  vector<vector<double> >().swap(newFreqcnt_lg);
 }
 
 template <class T>
@@ -489,7 +608,11 @@ template <class T>
 void Class<T>::unload(){
   vector<T>().swap(kmers);
   vector<double>().swap(freqcnt_lg);
-  vector<pair<T, int> >().swap(pending);
+  vector<vector<pair<T, int> > >().swap(pendingRanges);
+  vector<vector<T> >().swap(newKmers);
+  vector<vector<double> >().swap(newFreqcnt_lg);
+  splitters.clear();
+  updating = false;
   trainedGenomes.clear();
 
   isLoaded = false;

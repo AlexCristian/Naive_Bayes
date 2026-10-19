@@ -243,6 +243,7 @@ int main(int argc, char* argv[]){
   uint64_t memLimit;
   string kmer_ext, srcdir, mode, savedir;
   bool print_posterior, canonical, no_prior;
+  uint64_t workmem;
 
   p_opt::options_description generic("Generic options");
   generic.add_options()
@@ -277,6 +278,10 @@ flag increases the classifier's memory usage and is not compatible with the memo
     ("canonical,c", p_opt::value<bool>(&canonical)->default_value(true),
             "Whether k-mer count files hold canonical k-mers (jellyfish -C). \
 Sets the vocabulary size used for smoothing; must match how counts were made.")
+    ("workmem,w", p_opt::value<uint64_t>(&workmem)->default_value(8192),
+            "Memory (MB) that classes being trained or classified may hold at \
+once. Threads share classes, so this doesn't grow with -t; classes are \
+opened largest first while they fit.")
     ("no-prior", p_opt::bool_switch(&no_prior),
             "Score classes by likelihood alone, without the prior that favors \
 classes trained on more genomes.")
@@ -331,6 +336,7 @@ classes trained on more genomes.")
   }
   NB nb(kmersize, path(savedir), nthreads);
   nb.debug_flag = NB::Debug::LOG_SOME;
+  nb.setWorkMemory(workmem << 20);
 
   if((mode.compare("classify") == 0 || mode.compare("convert") == 0)
      && nb.numClasses() == 0){
