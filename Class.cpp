@@ -104,6 +104,17 @@ size_t Class<T>::numKmers(){
 }
 
 template <class T>
+uint64_t Class<T>::queuedKmerEstimate(){
+  uint64_t total = 0;
+  queue<Genome*> copy = queuedGenomes;
+  while(!copy.empty()){
+    total += copy.front()->estimatedKmers();
+    copy.pop();
+  }
+  return total;
+}
+
+template <class T>
 uint64_t Class<T>::queuedBytes(){
   uint64_t total = 0;
   queue<Genome*> copy = queuedGenomes;

@@ -132,17 +132,15 @@ void NB::processClassUpdates(){
   while(!classesToProcess.empty()){
     Class<kmer_t>* cl = classesToProcess.front();
     classesToProcess.pop();
-    uint64_t saved = 0, genome_bytes = cl->queuedBytes();
+    uint64_t saved = 0, new_kmers = cl->queuedKmerEstimate();
     boost::system::error_code ec;
     uintmax_t size = file_size(cl->getSavefilePath(), ec);
     if(!ec){
       saved = size;
     }
     // In memory: the class twice during the commit (old and new arrays),
-    // plus the new counts, at ~16 bytes per k-mer against ~(k + 4) bytes
-    // per line of k-mer file.
-    uint64_t new_kmer_bytes = genome_bytes / (kmer_size + 4) * 16;
-    jobs.push_back({cl, saved + genome_bytes, 2 * saved + new_kmer_bytes + 1});
+    // plus the new counts, at ~16 bytes per k-mer.
+    jobs.push_back({cl, saved + 16 * new_kmers, 2 * saved + 16 * new_kmers + 1});
   }
   classesQueuedForUpdate.clear();
   sort(jobs.begin(), jobs.end(),
@@ -172,15 +170,10 @@ void NB::trainClass(Class<kmer_t>* cl, uint64_t bytes, TaskPool& pool){
   cl->load();
   vector<Genome*> todo = cl->takeGenomesToTrain();
 
-  uint64_t genome_bytes = 0;
+  size_t estimate = cl->numKmers();
   for(size_t i = 0; i < todo.size(); i++){
-    boost::system::error_code ec;
-    uintmax_t size = file_size(todo[i]->getKmrPath(), ec);
-    if(!ec){
-      genome_bytes += size;
-    }
+    estimate += todo[i]->estimatedKmers();
   }
-  size_t estimate = cl->numKmers() + genome_bytes / (kmer_size + 4);
   size_t R = splitCount(estimate, 1 << 20);
 
   // A new class has no k-mers to split on yet: parse one genome first and

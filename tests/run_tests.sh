@@ -112,6 +112,22 @@ $BIN train d14 -s s14 -k 5 > /dev/null
 check "prior favors bigger class" "$($BIN classify q14 -s s14 -k 5 | grep -o 'predicted [A-Za-z]*')" "predicted Big"
 check "--no-prior removes it" "$($BIN classify q14 -s s14 -k 5 --no-prior | grep -o 'predicted [A-Za-z]*')" "predicted Small"
 
+# 15: counting k-mers straight from FASTA (gzipped or not) gives the same
+# model as jellyfish count -C: several records, N runs, lowercase, short records
+mkdir -p d15j/A d15f/A d15g/A
+python3 -c "
+import random; r=random.Random(5)
+seq=lambda n: ''.join(r.choice('ACGT') for _ in range(n))
+s='>r1 x\n'+seq(500)+'NNNN'+seq(300).lower()+'\n'+seq(80)+'\n>r2\n'+seq(10)+'\n>r3\n'+seq(700)+'N'+seq(40)+'\n'
+open('d15j/A/g.fasta','w').write(s); open('d15f/A/g.fna','w').write(s)"
+gzip -c d15f/A/g.fna > d15g/A/g.fna.gz
+jellyfish count -m 11 -s 1M -C -o d15j/A/g.jf d15j/A/g.fasta && jellyfish dump -c d15j/A/g.jf > d15j/A/g.kmr
+$BIN train d15j -s s15j -k 11 > /dev/null; $BIN train d15f -s s15f -k 11 -e .fna > /dev/null; $BIN train d15g -s s15g -k 11 -e .gz > /dev/null
+strip(){ python3 -c "$SAVEPY
+x=read('$1'); print(x[:3])"; }
+check "FASTA counts = jellyfish -C" "$([ "$(strip s15j/A-save.dat)" == "$(strip s15f/A-save.dat)" ] && echo same)" same
+check "gzipped FASTA counts = jellyfish -C" "$([ "$(strip s15j/A-save.dat)" == "$(strip s15g/A-save.dat)" ] && echo same)" same
+
 # 13: legacy (format 1) savefiles still load, with a warning
 if [ -n "${LEGACY_BIN:-}" ]; then
   $LEGACY_BIN train d2 -s s13 -k 5 > /dev/null

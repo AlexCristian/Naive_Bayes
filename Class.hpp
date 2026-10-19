@@ -149,6 +149,9 @@ public:
     /** @return Total size in bytes of the queued genomes' k-mer files. */
     uint64_t queuedBytes();
 
+    /** @return Rough number of k-mers in the queued genomes' files. */
+    uint64_t queuedKmerEstimate();
+
     /**
      * Queues a genome to be added to this class.
      * @param genome The genome to be trained on.

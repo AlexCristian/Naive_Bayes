@@ -66,6 +66,8 @@ This option specifies the extension of the files containing the kmer counts for 
 
 The default value is ".kmr", which will make the program look for files like "MyCount.kmr".
 
+NBC++ can also count k-mers itself, straight from FASTA files: files ending in `.fa`, `.fasta` or `.fna`, optionally gzipped (`.fa.gz`, `.fna.gz`, ...), are read as sequences and their canonical k-mers counted the same way as `jellyfish count -C` (k-mers don't span records or non-ACGT bases). Point `--ext` at them, e.g. `-e .gz` for `.fna.gz` genomes. This skips the Jellyfish step and its large text files: a bacterial genome is ~1.5 MB gzipped against ~60 MB of k-mer counts, so training reads far less from disk and is limited by CPU rather than disk speed.
+
 ### -k : Using the --kmersize option
 A different kmer size than the default may be selected by modifying this option.
 

@@ -104,6 +104,18 @@ public:
   void loadSortedKmerCounts(vector<pair<kmer_t, int> >& out);
 
   /**
+   * @return True if the input file is a FASTA sequence (.fa, .fasta, .fna,
+   *         optionally gzipped) to count k-mers from, rather than a
+   *         jellyfish k-mer count file.
+   */
+  bool isFasta();
+
+  /**
+   * @return A rough count of the k-mers in the input file, from its size.
+   */
+  uint64_t estimatedKmers();
+
+  /**
    * Gets the character located at position "pos" in the DNA sequence.
    * @param  pos Integer, representing the position we want to query.
    * @return     The base associated to that position.
@@ -177,6 +189,10 @@ protected:
   // valid k-mer.
   template <class F>
   void parseKmrFile(F add);
+
+  // Counts canonical k-mers (a k-mer and its reverse complement counted as
+  // one, like jellyfish count -C) of every sequence in a FASTA file.
+  void countFastaKmers(vector<pair<kmer_t, int> >& out);
   long long int max(long long int a,
                     long long int b,
                     long long int c,

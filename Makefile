@@ -1,7 +1,7 @@
 CC=g++ -std=c++11 -pthread
 OPT=-O3
 CPPFLAGS=-I$(BOOSTINCLUDEDIR)
-LDFLAGS=-L$(BOOSTLIBDIR) -lboost_filesystem -lboost_system -lboost_program_options
+LDFLAGS=-L$(BOOSTLIBDIR) -lboost_filesystem -lboost_system -lboost_program_options -lz
 DBG=-g
 
 .PHONY: default all clean debug
@@ -19,7 +19,7 @@ debug: Class.cpp Class.hpp NB.cpp NB.hpp main.cpp Genome.hpp Genome.cpp Diskutil
 	chmod +x NB.run
 
 NB.run: Class.cpp Class.hpp NB.cpp NB.hpp main.cpp Genome.hpp Genome.cpp Diskutil.hpp Diskutil.cpp
-	$(CC) $(OPT) Genome.cpp Class.hpp NB.cpp Diskutil.cpp main.cpp -o NB.run -lboost_filesystem -lboost_system -lboost_program_options
+	$(CC) $(OPT) Genome.cpp Class.hpp NB.cpp Diskutil.cpp main.cpp -o NB.run -lboost_filesystem -lboost_system -lboost_program_options -lz
 	chmod +x NB.run
 clean:
 	@rm NB.run

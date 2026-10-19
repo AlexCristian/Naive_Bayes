@@ -8,6 +8,7 @@
 
 #include "Genome.hpp"
 #include <stdexcept>
+#include <zlib.h>
 #include <algorithm>
 #include <cctype>
 #include <iterator>
@@ -115,6 +116,102 @@ void Genome::parseKmrFile(F add){
   }
 }
 
+bool Genome::isFasta(){
+  string name = kmr_path.filename().native();
+  if(name.size() > 3 && name.compare(name.size() - 3, 3, ".gz") == 0){
+    name = name.substr(0, name.size() - 3);
+  }
+  string ext = path(name).extension().native();
+  return ext == ".fa" || ext == ".fasta" || ext == ".fna";
+}
+
+uint64_t Genome::estimatedKmers(){
+  boost::system::error_code ec;
+  uintmax_t size = file_size(kmr_path, ec);
+  if(ec){
+    return 0;
+  }
+  if(isFasta()){
+    // About one k-mer per base; gzip packs DNA roughly 3.5x.
+    string name = kmr_path.filename().native();
+    bool gz = name.size() > 3 && name.compare(name.size() - 3, 3, ".gz") == 0;
+    return gz ? size * 7 / 2 : size;
+  }
+  return size / (KMER_SIZE + 4); // one "<k-mer> <count>" line each
+}
+
+void Genome::countFastaKmers(vector<pair<kmer_t, int> >& out){
+  out.clear();
+  if(KMER_SIZE == 0){
+    cerr<<"[ERROR] k-mer size must be set to count k-mers from FASTA.\n";
+    exit(1);
+  }
+  // gzread() reads both gzipped and plain files.
+  gzFile in = gzopen(kmr_path.native().c_str(), "rb");
+  if(in == NULL){
+    cerr<<"[ERROR] Cannot read FASTA file "<<kmr_path.native()<<"\n";
+    exit(1);
+  }
+  const unsigned int k = KMER_SIZE;
+  const kmer_t mask = (k == 32) ? ~(kmer_t)0 : (((kmer_t)1 << (2 * k)) - 1);
+  const int rc_shift = 2 * (k - 1);
+  vector<kmer_t> codes;
+  kmer_t fwd = 0, rev = 0;
+  unsigned int valid = 0;     // bases since the last break
+  bool header = false, line_start = true;
+  vector<char> buf(1 << 20);
+  int got;
+  while((got = gzread(in, buf.data(), buf.size())) > 0){
+    for(int i = 0; i < got; i++){
+      char c = buf[i];
+      if(line_start && c == '>'){
+        header = true;
+        valid = 0;            // k-mers never span two sequences
+      }
+      line_start = (c == '\n');
+      if(header){
+        if(c == '\n'){
+          header = false;
+        }
+        continue;
+      }
+      kmer_t b;
+      switch(c){
+        case 'A': case 'a': b = 0; break;
+        case 'C': case 'c': b = 1; break;
+        case 'G': case 'g': b = 2; break;
+        case 'T': case 't': b = 3; break;
+        case '\n': case '\r': case ' ': case '\t': continue;
+        default: valid = 0; continue; // N and other codes break k-mers
+      }
+      fwd = ((fwd << 2) | b) & mask;
+      rev = (rev >> 2) | ((3 - b) << rc_shift);
+      if(++valid >= k){
+        // With A<C<G<T coded 0-3, numeric order is lexicographic order, so
+        // the smaller code is jellyfish's canonical k-mer.
+        codes.push_back(fwd < rev ? fwd : rev);
+      }
+    }
+  }
+  int err;
+  const char* msg = gzerror(in, &err);
+  if(got < 0 || (err != Z_OK && err != Z_STREAM_END)){
+    cerr<<"[ERROR] Cannot read FASTA file "<<kmr_path.native()<<": "<<msg<<"\n";
+    exit(1);
+  }
+  gzclose(in);
+
+  sort(codes.begin(), codes.end());
+  for(size_t i = 0; i < codes.size(); ){
+    size_t j = i;
+    while(j < codes.size() && codes[j] == codes[i]){
+      j++;
+    }
+    out.push_back(make_pair(codes[i], (int)(j - i)));
+    i = j;
+  }
+}
+
 void Genome::loadKmerCounts(){
   /*
    * Several classifier threads can ask for the same read at once. Re-check the
@@ -127,11 +224,23 @@ void Genome::loadKmerCounts(){
   }
 
   kmer_counts = new unordered_map<kmer_t, int>;
-  parseKmrFile([this](kmer_t kmer, int count){ (*kmer_counts)[kmer] += count; });
+  if(isFasta()){
+    vector<pair<kmer_t, int> > counts;
+    countFastaKmers(counts);
+    for(size_t i = 0; i < counts.size(); i++){
+      (*kmer_counts)[counts[i].first] += counts[i].second;
+    }
+  }else{
+    parseKmrFile([this](kmer_t kmer, int count){ (*kmer_counts)[kmer] += count; });
+  }
   kmersLoaded = true;
 }
 
 void Genome::loadSortedKmerCounts(vector<pair<kmer_t, int> >& out){
+  if(isFasta()){
+    countFastaKmers(out);
+    return;
+  }
   out.clear();
   parseKmrFile([&out](kmer_t kmer, int count){ out.push_back(make_pair(kmer, count)); });
   sort(out.begin(), out.end());
