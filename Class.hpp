@@ -12,15 +12,17 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <queue>
 #include <utility>
 #include <cmath>
 #include <cassert>
 #include <cstring>
+#include <cstdint>
 #include <string>
-#include <unordered_set>
 #include <atomic>
+#include <algorithm>
 #include <boost/filesystem.hpp>
 using namespace boost::filesystem;
 using namespace std;
@@ -49,19 +51,6 @@ public:
     string getId();
 
     /**
-     * Prints the current instance in machine-readable format.
-     * @return The serialized data of this class, typically contained in
-     *         a savefile.
-     */
-    string serialize();
-
-    /**
-     * Reads a savefile and reconstructs a class from machine-readable format.
-     * @param in A stream pointing to the savefile.
-     */
-    void deserialize(std::ifstream& in);
-
-    /**
      * Checks that a savefile was written for this k-mer size and counting
      * mode, reading only its header. Exits with an error on mismatch.
      * Legacy savefiles (no header) pass with a warning.
@@ -81,63 +70,59 @@ public:
     void load();
 
     /**
-     * Releases resources pertaining to kmer counts and any loaded DNA
-     * sequences. These must be reloaded if they are to be used after this
-     * function call.
+     * Releases the class's k-mer data. It must be reloaded before further
+     * use.
      */
     void unload();
 
     /**
-     * Writes the serialized class to a savefile.
+     * Writes the class to a savefile, folding in any genomes trained since it
+     * was loaded.
      * @param destination_path The path to the savefile on disk.
      */
     void save(path destination_path);
 
     /**
-     * Writes the serialized class to the set savefile.
+     * Writes the class to the set savefile.
      */
     void save();
 
     /**
-     * Compute numerators for all genomes awaiting classification.
-     * @param genomes Array of genomes for which to compute numerator.
+     * Looks up the class's smoothed log count for each k-mer of a sorted,
+     * duplicate-free list.
+     * @param kmers Sorted, unique k-mers.
+     * @param out   Resized to kmers.size(); out[i] is the log count of
+     *              kmers[i], or 0 (log 1, the smoothing pseudo-count) if the
+     *              class has never seen it.
      */
-    void computeBatchNumerators(vector<Genome*> genomes);
+    void lookupFreqCounts_lg(const vector<T>& kmers, vector<double>& out);
 
     /**
-     * Adds a genome to the class, training it to fit its pattern.
-     * @param genome        The genome to be added to the class.
-     * @param confidence_lg Our confidence in the genome's class membership.
+     * Adds a genome's k-mer counts to the class.
+     * @param genome The genome to be added to the class.
      */
-    void addGenome(Genome* genome, double confidence_lg = 0.0);
+    void addGenome(Genome* genome);
 
     /**
-     * Queues a genome to be added to this class (with confidence = 1).
+     * Queues a genome to be added to this class.
      * @param genome The genome to be trained on.
      */
     void queueGenome(Genome* genome);
 
     /**
      * Train this class on all of its queued genomes, waiting to be added.
+     * Genomes already trained into the class (same file name) are skipped.
      */
     void addGenomesInQueue();
 
     /**
-     * Getter for the NGenomes_lg Naive Bayes parameter.
-     * @return The log of the number of genomes present in this class.
+     * @return The log of (1 + the number of genomes in this class).
      */
     double getNGenomes_lg();
 
     /**
-     * Getter for the FreqCount_lg Naive Bayes parameter.
-     * @param  feature_ The feature (kmer) for which we're looking up the count.
-     * @return          The (smoothed and logged) count.
-     */
-    double getFreqCount_lg(T feature_);
-
-    /**
-     * Getter for the SumFreq_lg Naive Bayes parameter.
-     * @return The total count of all kmers, smoothed and logged.
+     * @return The log of (total k-mer count + vocabulary size), the smoothed
+     *         denominator.
      */
     double getSumFreq_lg();
 
@@ -166,51 +151,51 @@ public:
     static double vocabularySize(int kmer_size);
 
     /** Savefile format written by this build. */
-    static const int SAVEFILE_VERSION = 2;
+    static const int SAVEFILE_VERSION = 3;
 
 protected:
   bool isLoaded = false;
   string id;
   int kmerSize;
+  path savefile;
+  vector<Genome*> genomes;
+  queue<Genome*> queuedGenomes;
 
   // File names of genomes already trained into this class (kept in the
   // savefile), so re-running training on the same files doesn't count them
   // twice.
   unordered_set<string> trainedGenomes;
-  path savefile;
-  vector<Genome*> genomes;
-  queue<Genome*> queuedGenomes;
 
   typedef pair<double, bool> double_wflag;
 
-  // Log data cached for classifying
+  // Log data cached for classifying. The flag is false while plain counts
+  // added since loading still need folding in.
   double_wflag ngenomes_lg, sumfreq_lg;
-  unordered_map<T, double_wflag> *freqcnt_lg;
 
-  // Plain data, for updates
+  // Plain counts added since loading.
   int ngenomes;
   long long int sumfreq;
-  unordered_map<T, int> *freqcnt;
 
-  void addNGenomes_lg(double ngenomes_);
-  void addSumfreq_lg(double sumfreq_);
-  void addFreqCount_lg(T feature_, double count_);
+  // Trained k-mers (sorted) and their smoothed log counts, log(1 + count).
+  vector<T> kmers;
+  vector<double> freqcnt_lg;
+
+  // K-mer counts added since loading, sorted by k-mer, not yet folded into
+  // freqcnt_lg.
+  vector<pair<T, int> > pending;
+
   void addNGenomes(int ngenomes_);
   void addSumfreq(long long int sumfreq_);
-  void addFreqCount(T feature_, int count_);
-  bool existsInFreqCount(T feature_);
+  void foldInPending();
 
-  unordered_map<T, double_wflag>& getFreqcnt_lg();
-  unordered_map<T, int>& getFreqcnt();
+  void readTextBody(std::istream& in, bool legacy);
+  void readBinaryBody(std::istream& in);
 
   [[noreturn]] void savefileError(path file, string what);
   static uint64_t serializeDouble(double value);
   static double deserializeDouble(uint64_t value);
-  static double logAdd(vector<double> exponents);
+  static double logAdd(double a, double b);
 };
-
-template <class T>
-ostream& operator<<(ostream& out, Class<T>& cls);
 
 #include "Class.cpp"
 

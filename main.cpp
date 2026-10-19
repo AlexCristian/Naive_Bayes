@@ -16,7 +16,8 @@
 using namespace std;
 namespace p_opt = boost::program_options;
 
-string usageMsg("./NB.run [mode: train/classify/benchmark] [source dir] [options]\n");
+string usageMsg("./NB.run [mode: train/classify/benchmark] [source dir] [options]\n"
+                "./NB.run convert [save dir] [options]  (rewrite savefiles in the current format)\n");
 const int CONF_THRESHOLD = 100000;
 const int DEF_KMER_SIZE = 6;
 const string GEN_SEQ_EXTEN(".fna");
@@ -317,6 +318,9 @@ classes trained on more genomes.")
   Genome::USE_PRIOR = !no_prior;
   Class<kmer_t>::CANONICAL_KMERS = canonical;
 
+  if(mode.compare("convert") == 0){
+    savedir = srcdir;
+  }
   bool training = mode.compare("train") == 0 || mode.compare("benchmark") == 0;
   if(training){
     create_directories(savedir);
@@ -328,7 +332,8 @@ classes trained on more genomes.")
   NB nb(kmersize, path(savedir), nthreads);
   nb.debug_flag = NB::Debug::LOG_SOME;
 
-  if(mode.compare("classify") == 0 && nb.numClasses() == 0){
+  if((mode.compare("classify") == 0 || mode.compare("convert") == 0)
+     && nb.numClasses() == 0){
     cerr<<"Save directory "<<savedir<<" holds no trained classes.\n";
     return 1;
   }
@@ -350,6 +355,15 @@ classes trained on more genomes.")
     cout<<"Classify mode.\n";
 
     classifyNB(nb, path(srcdir), kmer_ext, nbatch, memLimit);
+
+  }else if(mode.compare("convert") == 0){
+    cout<<"Convert mode.\n";
+
+    // Loading and re-saving each class writes it in the current format.
+    nb.queueAllClassesForUpdate();
+    nb.processClassUpdates();
+
+    cout<<"Conversion complete.\n";
 
   }else if(mode.compare("benchmark") == 0){
     trainNB(nb, path(srcdir), kmer_ext, nbatch, memLimit);

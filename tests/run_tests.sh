@@ -7,15 +7,30 @@ mkseq(){ python3 -c "import random,sys;random.seed($2);print('>s');print(''.join
 mkdata(){ # dir nclass ngen len k
   for c in $(seq 1 $2); do mkdir -p $1/C$c; for g in $(seq 1 $3); do f=$1/C$c/g$g.fasta; mkseq $4 $((c*100+g)) > $f
     jellyfish count -m $5 -s 1M -C -o $f.jf $f && jellyfish dump -c $f.jf > ${f%.fasta}.kmr && rm $f.jf; done; done; }
-# savefile body tokens, skipping the "NBSAVE v k canonical" header if present
-body(){ python3 -c "
-t=open('$1').read().split(); print(' '.join(t[4:] if t[0]=='NBSAVE' else t))"; }
-ngen(){ python3 -c "
-import struct,math
-v=int('$(body $1)'.split()[0]); print(round(math.exp(struct.unpack('d',struct.pack('Q',v))[0])-1))"; }
-sumfreq(){ python3 -c "
-import struct,math
-v=int('$(body $1)'.split()[1]); print(round(math.exp(struct.unpack('d',struct.pack('Q',v))[0])))"; }
+# Savefile reader for formats 1-3 (helpers below print fields from it).
+SAVEPY='
+import struct,sys
+def read(p):
+    d=open(p,"rb").read()
+    if not d.startswith(b"NBSAVE"):                       # format 1 (text, no header)
+        t=d.split(); n=int(t[2]); kv=sorted((int(t[3+2*i]),int(t[4+2*i])) for i in range(n))
+        return int(t[0]),int(t[1]),kv,[]
+    nl=d.index(b"\n"); ver=int(d[:nl].split()[1])
+    if ver==2:
+        t=d[nl+1:].split(); n=int(t[2]); kv=sorted((int(t[3+2*i]),int(t[4+2*i])) for i in range(n))
+        return int(t[0]),int(t[1]),kv,sorted(x.decode() for x in t[3+2*n+2:])
+    o=nl+1; ng,sf,n=struct.unpack_from("<QQQ",d,o); o+=24
+    ks=struct.unpack_from("<%dQ"%n,d,o); o+=8*n; vs=struct.unpack_from("<%dQ"%n,d,o); o+=8*n
+    (m,)=struct.unpack_from("<Q",d,o); o+=8
+    return ng,sf,list(zip(ks,vs)),sorted(d[o:].decode().split("\n")[:m])
+'
+lg(){ python3 -c "$SAVEPY
+import math
+v=read('$1')[$2]; print(round(math.exp(struct.unpack('d',struct.pack('Q',v))[0])${3:-}))"; }
+ngen(){ lg $1 0 -1; }
+sumfreq(){ lg $1 1; }
+model(){ python3 -c "$SAVEPY
+print(read('$1'))"; }
 pass=0; fail=0
 check(){ if [ "$2" == "$3" ]; then echo "PASS $1"; pass=$((pass+1)); else echo "FAIL $1: got '$2' want '$3'"; fail=$((fail+1)); fi; }
 
@@ -63,7 +78,7 @@ check "k=20 no collision" "$($BIN classify q7 -s s7 -k 20 | grep -o 'predicted [
 
 if [ "${NEW_CHECKS:-1}" == "1" ]; then
 # 8: savefile carries a header and no temp files are left behind
-check "savefile header" "$(head -c 13 s2/C1-save.dat)" "NBSAVE 2 5 1"
+check "savefile header" "$(head -c 13 s2/C1-save.dat)" "NBSAVE 3 5 1"
 check "no leftover tmp" "$(ls s2 | grep -c tmp)" 0
 
 # 9: truncated savefile is an error, not a silently smaller model
@@ -86,7 +101,7 @@ check "empty savedir: exit 1" $rc 1
 # 12: re-running training on the same genomes doesn't double count
 cp -r s2 s12; $BIN train d2 -s s12 -k 5 -m 10 > l12.txt
 check "retrain skips trained genomes" "$(ngen s12/C1-save.dat):$(grep -c Skipping l12.txt)" "3:6"
-check "retrain leaves model unchanged" "$(cmp -s <(body s2/C1-save.dat | tr ' ' '\n' | sort) <(body s12/C1-save.dat | tr ' ' '\n' | sort) && echo same)" same
+check "retrain leaves model unchanged" "$([ "$(model s2/C1-save.dat)" == "$(model s12/C1-save.dat)" ] && echo same)" same
 
 # 14: --no-prior drops the prior term. Small (1 genome) has a slightly higher
 # likelihood for the query; Big (2 genomes) only wins through its prior.

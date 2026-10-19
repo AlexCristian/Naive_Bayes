@@ -17,6 +17,8 @@
 #include <thread>
 #include <mutex>
 #include <unordered_set>
+#include <functional>
+#include <algorithm>
 #include "Genome.hpp"
 #include "Class.hpp"
 #include "Diskutil.hpp"
@@ -96,6 +98,12 @@ public:
     bool isClassQueuedForUpdate(Class<kmer_t>* cl);
 
     /**
+     * Queues every class for an update (with no new genomes, an update just
+     * reloads and re-saves the class).
+     */
+    void queueAllClassesForUpdate();
+
+    /**
      * Triggers all queued classes to update.
      */
     void processClassUpdates();
@@ -131,7 +139,9 @@ protected:
     mutex classQueueAccess;
 
     static int min(int a, int b, int c);
-    void classifyThreadController(vector<Genome*>& reads);
+    void classifyThreadController(vector<Genome*>& reads,
+                                  const vector<kmer_t>& batch_kmers);
+    void forEachRead(vector<Genome*>& reads, function<void(Genome*)> fn);
     void trainThreadController();
 };
 

@@ -52,8 +52,8 @@ void Class<T>::savefileError(path file, string what){
 
 template <class T>
 Class<T>::~Class() {
-  for(vector<Genome*>::iterator iter = genomes.begin(); iter != genomes.end();
-      iter++){
+  for(typename vector<Genome*>::iterator iter = genomes.begin();
+      iter != genomes.end(); iter++){
         delete *iter;
       }
 }
@@ -80,24 +80,17 @@ void Class<T>::addGenomesInQueue(){
 }
 
 template <class T>
-double Class<T>::logAdd(vector<double> exponents){
-  double result = 0, max;
-  int maxId = -1;
-  for(vector<double>::iterator num=exponents.begin();
-    num != exponents.end(); num++){
-    if(maxId == -1 || max < *num){
-      maxId = 0;
-      max = *num;
-    }
+double Class<T>::logAdd(double a, double b){
+  // log(e^a + e^b), computed exactly as the original vector version did
+  // (same max choice and summation order) so savefiles stay bit-identical.
+  double max = a;
+  if(max < b){
+    max = b;
   }
-
-  for(vector<double>::iterator num=exponents.begin();
-    num != exponents.end(); num++){
-    result += exp(*num - max);
-  }
-  result = max + log(result);
-
-  return result;
+  double result = 0;
+  result += exp(a - max);
+  result += exp(b - max);
+  return max + log(result);
 }
 
 template <class T>
@@ -119,44 +112,6 @@ void Class<T>::addSumfreq(long long int sumfreq_){
 }
 
 template <class T>
-void Class<T>::addFreqCount(T feature_, int count_){
-  if(getFreqcnt().find(feature_) == getFreqcnt().end()){
-    getFreqcnt()[feature_] = count_;
-  }else{
-    getFreqcnt()[feature_] += count_;
-  }
-  if(getFreqcnt_lg().find(feature_) == getFreqcnt_lg().end()){
-      getFreqcnt_lg()[feature_] = make_pair(0 ,false);
-  }else{
-      getFreqcnt_lg()[feature_].second = false;
-  }
-}
-
-template <class T>
-void Class<T>::addSumfreq_lg(double sumfreq_){
-  vector<double> items;
-  items.push_back(getSumFreq_lg());
-  items.push_back(sumfreq_);
-  sumfreq_lg.first = logAdd(items);
-}
-
-template <class T>
-void Class<T>::addNGenomes_lg(double ngenomes_){
-  vector<double> items;
-  items.push_back(getNGenomes_lg());
-  items.push_back(ngenomes_);
-  ngenomes_lg.first = logAdd(items);
-}
-
-template <class T>
-void Class<T>::addFreqCount_lg(T feature_, double count_){
-  vector<double> items;
-  items.push_back(getFreqCount_lg(feature_));
-  items.push_back(count_);
-  getFreqcnt_lg()[feature_].first = logAdd(items);
-}
-
-template <class T>
 path Class<T>::getSavefilePath(){
   return savefile;
 }
@@ -164,50 +119,21 @@ path Class<T>::getSavefilePath(){
 template <class T>
 double Class<T>::getNGenomes_lg(){
   if(!ngenomes_lg.second){
-    vector<double> terms;
-    terms.push_back(ngenomes_lg.first);
-    terms.push_back(log(ngenomes));
+    ngenomes_lg.first = logAdd(ngenomes_lg.first, log(ngenomes));
     ngenomes = 0;
-    ngenomes_lg.first = logAdd(terms);
     ngenomes_lg.second = true;
   }
   return ngenomes_lg.first;
 }
 
 template <class T>
-double Class<T>::getFreqCount_lg(T feature_){
-  if(!existsInFreqCount(feature_)){
-    return 0;
-  }else{
-    if(!getFreqcnt_lg()[feature_].second){
-      vector<double> terms;
-      terms.push_back(getFreqcnt_lg()[feature_].first);
-      terms.push_back(log(getFreqcnt()[feature_]));
-      getFreqcnt()[feature_] = 0;
-      getFreqcnt_lg()[feature_].first = logAdd(terms);
-      getFreqcnt_lg()[feature_].second = true;
-    }
-    return getFreqcnt_lg()[feature_].first;
-  }
-}
-
-template <class T>
 double Class<T>::getSumFreq_lg(){
   if(!sumfreq_lg.second){
-    vector<double> terms;
-    terms.push_back(sumfreq_lg.first);
-    terms.push_back(log(sumfreq));
+    sumfreq_lg.first = logAdd(sumfreq_lg.first, log(sumfreq));
     sumfreq = 0;
-    sumfreq_lg.first = logAdd(terms);
     sumfreq_lg.second = true;
   }
   return sumfreq_lg.first;
-}
-
-template <class T>
-bool Class<T>::existsInFreqCount(T feature_){
-  return (getFreqcnt().find(feature_) != getFreqcnt().end())
-    || (getFreqcnt_lg().find(feature_) != getFreqcnt_lg().end());
 }
 
 template <class T>
@@ -232,167 +158,120 @@ double Class<T>::deserializeDouble(uint64_t value){
 }
 
 template <class T>
-void Class<T>::addGenome(Genome* genome, double confidence_lg){
-  if(confidence_lg == 0.0)
-    addNGenomes(1);
-  else
-    addNGenomes_lg(confidence_lg + log(1));
+void Class<T>::addGenome(Genome* genome){
+  addNGenomes(1);
 
-  long long int sum=0, new_features=0;
-  unordered_map<T, int>& freqs = genome->getKmerCounts();
-  for(typename unordered_map<T, int>::iterator iter = freqs.begin();
-    iter != freqs.end(); iter++){
-      sum += iter->second;
-      if(existsInFreqCount(iter->first)){
-        new_features++;
+  vector<pair<T, int> > counts;
+  genome->loadSortedKmerCounts(counts);
+
+  // Merge into the pending counts (both sorted by k-mer).
+  long long int sum = 0;
+  vector<pair<T, int> > merged;
+  merged.reserve(pending.size() + counts.size());
+  size_t i = 0, j = 0;
+  while(i < pending.size() || j < counts.size()){
+    if(j == counts.size()
+       || (i < pending.size() && pending[i].first < counts[j].first)){
+      merged.push_back(pending[i++]);
+    }else{
+      sum += counts[j].second;
+      if(i < pending.size() && pending[i].first == counts[j].first){
+        merged.push_back(make_pair(pending[i].first,
+                                   pending[i].second + counts[j].second));
+        i++;
+      }else{
+        merged.push_back(counts[j]);
       }
-      if(confidence_lg == 0.0)
-        addFreqCount(iter->first, iter->second);
-      else
-        addFreqCount_lg(iter->first, confidence_lg + log(iter->second));
+      j++;
     }
+  }
+  pending.swap(merged);
 
-  if(confidence_lg == 0.0)
-    addSumfreq(sum);
-  else
-    addSumfreq_lg(confidence_lg + log(sum));
+  addSumfreq(sum);
   genomes.push_back(genome);
 }
 
 template <class T>
-void Class<T>::computeBatchNumerators(vector<Genome*> genomes){
-  for(vector<Genome*>::iterator iter = genomes.begin(); iter != genomes.end();
-    iter++){
-      (*iter)->computeClassificationNumerator(this);
+void Class<T>::foldInPending(){
+  if(pending.empty()){
+    return;
   }
+  // A k-mer's log count is log(1 + total count); the 1 is the smoothing
+  // pseudo-count. New counts are folded in with one logAdd per save, exactly
+  // like the original lazy update.
+  vector<T> new_kmers;
+  vector<double> new_lg;
+  new_kmers.reserve(kmers.size() + pending.size());
+  new_lg.reserve(kmers.size() + pending.size());
+  size_t i = 0, j = 0;
+  while(i < kmers.size() || j < pending.size()){
+    if(j == pending.size()
+       || (i < kmers.size() && kmers[i] < pending[j].first)){
+      new_kmers.push_back(kmers[i]);
+      new_lg.push_back(freqcnt_lg[i]);
+      i++;
+    }else{
+      double previous = 0; // log(1): the pseudo-count of an unseen k-mer
+      if(i < kmers.size() && kmers[i] == pending[j].first){
+        previous = freqcnt_lg[i];
+        i++;
+      }
+      new_kmers.push_back(pending[j].first);
+      new_lg.push_back(logAdd(previous, log(pending[j].second)));
+      j++;
+    }
+  }
+  kmers.swap(new_kmers);
+  freqcnt_lg.swap(new_lg);
+  vector<pair<T, int> >().swap(pending);
 }
 
 template <class T>
-void Class<T>::load(path source_path){
-  if(isLoaded){
+void Class<T>::lookupFreqCounts_lg(const vector<T>& query, vector<double>& out){
+  out.assign(query.size(), 0.0);
+  size_t n = kmers.size(), q = query.size();
+  if(n == 0 || q == 0){
     return;
+  }
+  // Binary-search each query k-mer when the class is much larger than the
+  // query; otherwise walk both sorted lists once.
+  if(q * (size_t)log2((double)n + 1) < n){
+    for(size_t j = 0; j < q; j++){
+      typename vector<T>::const_iterator it =
+        lower_bound(kmers.begin(), kmers.end(), query[j]);
+      if(it != kmers.end() && *it == query[j]){
+        out[j] = freqcnt_lg[it - kmers.begin()];
+      }
+    }
   }else{
-    isLoaded = true;
-  }
-
-  freqcnt_lg = new unordered_map<T, double_wflag>;
-  freqcnt = new unordered_map<T, int>;
-  trainedGenomes.clear();
-
-  // No savefile yet means a new, empty class. An existing savefile that
-  // can't be read is an error, not an empty class.
-  if(!exists(source_path)){
-    return;
-  }
-  std::ifstream in(source_path.native());
-  if(!in.good()){
-    savefileError(source_path, "cannot open for reading");
-  }
-  deserialize(in);
-  in.close();
-}
-
-template <class T>
-void Class<T>::save(path destination_path){
-  // Write to a temp file and rename it over the old savefile, so a crash or
-  // full disk mid-write never leaves a truncated savefile behind.
-  path tmp_path = path(destination_path.native() + ".tmp");
-  std::ofstream out(tmp_path.native());
-  out<<serialize();
-  out.close();
-  if(out.fail()){
-    remove(tmp_path);
-    savefileError(destination_path, "write failed (disk full?)");
-  }
-  boost::system::error_code ec;
-  rename(tmp_path, destination_path, ec);
-  if(ec){
-    savefileError(destination_path, "could not replace savefile: " + ec.message());
-  }
-}
-
-template <class T>
-void Class<T>::save(){
-  save(savefile);
-}
-
-template <class T>
-void Class<T>::load(){
-  load(savefile);
-}
-
-template <class T>
-void Class<T>::unload(){
-  delete freqcnt;
-  delete freqcnt_lg;
-  trainedGenomes.clear();
-
-  isLoaded = false;
-}
-
-template <class T>
-bool Class<T>::loaded(){
-  return isLoaded;
-}
-
-template <class T>
-unordered_map<T, pair<double, bool> >& Class<T>::getFreqcnt_lg(){
-  return *freqcnt_lg;
-}
-
-template <class T>
-unordered_map<T, int>& Class<T>::getFreqcnt(){
-  return *freqcnt;
-}
-
-/*
- *  WARNING: Serialization may be platform-dependent, as C++11 does not
- *  guarantee all 'double' types to follow the IEEE-754 64-bit standard.
- */
-template <class T>
-string Class<T>::serialize(){
-  ostringstream strs;
-  /*
-   * Serialization format spec (version 2):
-   * NBSAVE <version> <k-mer size> <canonical 0/1>
-   * ngenomes_lg sumfreq_lg freqcnt_lg.size() [kmer freqcnt_lg]...
-   * GENOMES <count>
-   * <one trained genome file name per line>
-   * Doubles are stored as their IEEE-754 bit patterns (uint64).
-   */
-
-  strs<<"NBSAVE "<<SAVEFILE_VERSION<<" "<<kmerSize<<" "<<CANONICAL_KMERS<<"\n";
-  strs<<serializeDouble(getNGenomes_lg())<<" ";
-  strs<<serializeDouble(getSumFreq_lg())<<" "<<getFreqcnt_lg().size();
-  for(typename unordered_map<T, double_wflag>::iterator iter = getFreqcnt_lg().begin();
-    iter != getFreqcnt_lg().end(); iter++){
-      strs<<" "<<iter->first<<" "<<serializeDouble(getFreqCount_lg(iter->first));
+    size_t i = 0;
+    for(size_t j = 0; j < q && i < n; j++){
+      while(i < n && kmers[i] < query[j]){
+        i++;
+      }
+      if(i < n && kmers[i] == query[j]){
+        out[j] = freqcnt_lg[i];
+      }
     }
-  strs<<"\nGENOMES "<<trainedGenomes.size()<<"\n";
-  for(typename unordered_set<string>::iterator iter = trainedGenomes.begin();
-    iter != trainedGenomes.end(); iter++){
-      strs<<*iter<<"\n";
-    }
-
-  return strs.str();
+  }
 }
 
 template <class T>
 void Class<T>::checkSavefileHeader(path source_path){
-  std::ifstream in(source_path.native());
+  std::ifstream in(source_path.native(), ios::binary);
   if(!in.good()){
     savefileError(source_path, "cannot open for reading");
   }
   string magic;
   in>>magic;
   if(magic != "NBSAVE"){
-    return; // legacy savefile; deserialize() warns
+    return; // legacy savefile; load() warns
   }
   int version, k, canonical;
   if(!(in>>version>>k>>canonical)){
     savefileError(source_path, "corrupt header");
   }
-  if(version != SAVEFILE_VERSION){
+  if(version != 2 && version != SAVEFILE_VERSION){
     savefileError(source_path, "unsupported format version "
                   + to_string(version));
   }
@@ -409,56 +288,92 @@ void Class<T>::checkSavefileHeader(path source_path){
 }
 
 template <class T>
-void Class<T>::deserialize(std::ifstream& in){
-  uint64_t tmp;
-  string first;
-  bool legacy = false;
-
-  in>>first;
-  if(first == "NBSAVE"){
-    int version, k, canonical;
-    in>>version>>k>>canonical;
-    // checkSavefileHeader() reports mismatches with a clear message.
-    if(!in || version != SAVEFILE_VERSION || k != kmerSize
-       || (canonical != 0) != CANONICAL_KMERS){
-      checkSavefileHeader(savefile);
-      savefileError(savefile, "corrupt header");
-    }
-    in>>tmp;
+void Class<T>::load(path source_path){
+  if(isLoaded){
+    return;
   }else{
+    isLoaded = true;
+  }
+
+  trainedGenomes.clear();
+
+  // No savefile yet means a new, empty class. An existing savefile that
+  // can't be read is an error, not an empty class.
+  if(!exists(source_path)){
+    return;
+  }
+  std::ifstream in(source_path.native(), ios::binary);
+  if(!in.good()){
+    savefileError(source_path, "cannot open for reading");
+  }
+
+  string magic;
+  in>>magic;
+  if(magic != "NBSAVE"){
     // Format 1: no header, no genome list, nothing to check k against.
-    legacy = true;
     static atomic<bool> warned(false);
     if(!warned.exchange(true)){
-      cerr<<"[WARNING] Legacy savefile format (e.g. "<<savefile.native()
+      cerr<<"[WARNING] Legacy savefile format (e.g. "<<source_path.native()
           <<"): k-mer size and counting mode can't be verified, and "
           "already-trained genomes can't be recognized. Savefiles are "
           "upgraded when next trained.\n";
     }
-    try{
-      tmp = stoull(first);
-    }catch(...){
-      savefileError(savefile, "not a savefile");
-    }
+    in.clear();
+    in.seekg(0);
+    readTextBody(in, true);
+    return;
+  }
+
+  int version, k, canonical;
+  in>>version>>k>>canonical;
+  if(!in || (version != 2 && version != SAVEFILE_VERSION) || k != kmerSize
+     || (canonical != 0) != CANONICAL_KMERS){
+    // checkSavefileHeader() reports mismatches with a clear message.
+    checkSavefileHeader(source_path);
+    savefileError(source_path, "corrupt header");
+  }
+  string rest;
+  getline(in, rest); // end of the header line
+  if(version == SAVEFILE_VERSION){
+    readBinaryBody(in);
+  }else{
+    readTextBody(in, false);
+  }
+}
+
+template <class T>
+void Class<T>::readTextBody(std::istream& in, bool legacy){
+  // Formats 1 and 2: decimal text, k-mers in hash order.
+  uint64_t tmp;
+  if(!(in>>tmp)){
+    savefileError(savefile, "truncated or corrupt (header values)");
   }
   ngenomes_lg = make_pair(deserializeDouble(tmp), true);
-
   in>>tmp;
   sumfreq_lg = make_pair(deserializeDouble(tmp), true);
 
   size_t n;
-  T kmer;
   in>>n;
   if(!in){
     savefileError(savefile, "truncated or corrupt (header values)");
   }
 
+  vector<pair<T, double> > entries;
+  entries.reserve(n);
+  T kmer;
   for(size_t i=0; i<n; i++){
     if(!(in>>kmer>>tmp)){
       savefileError(savefile, "truncated or corrupt (read " + to_string(i)
                     + " of " + to_string(n) + " k-mers)");
     }
-    getFreqcnt_lg()[kmer] = make_pair(deserializeDouble(tmp), true);
+    entries.push_back(make_pair(kmer, deserializeDouble(tmp)));
+  }
+  sort(entries.begin(), entries.end());
+  kmers.resize(n);
+  freqcnt_lg.resize(n);
+  for(size_t i=0; i<n; i++){
+    kmers[i] = entries[i].first;
+    freqcnt_lg[i] = entries[i].second;
   }
 
   if(legacy){
@@ -481,7 +396,106 @@ void Class<T>::deserialize(std::ifstream& in){
 }
 
 template <class T>
-ostream& operator<<(ostream& out, Class<T>& cls){
-  out<<cls.serialize();
-  return out;
+void Class<T>::readBinaryBody(std::istream& in){
+  double ngenomes_v, sumfreq_v;
+  uint64_t n;
+  in.read((char*)&ngenomes_v, sizeof(ngenomes_v));
+  in.read((char*)&sumfreq_v, sizeof(sumfreq_v));
+  in.read((char*)&n, sizeof(n));
+  if(!in){
+    savefileError(savefile, "truncated or corrupt (header values)");
+  }
+  ngenomes_lg = make_pair(ngenomes_v, true);
+  sumfreq_lg = make_pair(sumfreq_v, true);
+
+  kmers.resize(n);
+  freqcnt_lg.resize(n);
+  in.read((char*)kmers.data(), n * sizeof(T));
+  in.read((char*)freqcnt_lg.data(), n * sizeof(double));
+  if(!in){
+    savefileError(savefile, "truncated or corrupt (k-mer table)");
+  }
+
+  uint64_t m;
+  in.read((char*)&m, sizeof(m));
+  if(!in){
+    savefileError(savefile, "truncated or corrupt (genome list missing)");
+  }
+  string name;
+  for(uint64_t i=0; i<m; i++){
+    if(!getline(in, name)){
+      savefileError(savefile, "truncated or corrupt (read " + to_string(i)
+                    + " of " + to_string(m) + " genome names)");
+    }
+    trainedGenomes.insert(name);
+  }
+}
+
+template <class T>
+void Class<T>::save(path destination_path){
+  foldInPending();
+  double ngenomes_v = getNGenomes_lg(), sumfreq_v = getSumFreq_lg();
+  uint64_t n = kmers.size(), m = trainedGenomes.size();
+
+  /*
+   * Savefile format (version 3):
+   * NBSAVE <version> <k-mer size> <canonical 0/1>\n      (text)
+   * ngenomes_lg sumfreq_lg n                             (double, double, uint64)
+   * kmers[n] (sorted)  freqcnt_lg[n]                     (k-mer type, double)
+   * m, then m genome file names, one per line
+   * Binary fields use the machine's byte order (little-endian on x86/ARM).
+   *
+   * Written to a temp file and renamed over the old savefile, so a crash or
+   * full disk mid-write never leaves a truncated savefile behind.
+   */
+  path tmp_path = path(destination_path.native() + ".tmp");
+  {
+    std::ofstream out(tmp_path.native(), ios::binary);
+    out<<"NBSAVE "<<SAVEFILE_VERSION<<" "<<kmerSize<<" "<<CANONICAL_KMERS<<"\n";
+    out.write((const char*)&ngenomes_v, sizeof(ngenomes_v));
+    out.write((const char*)&sumfreq_v, sizeof(sumfreq_v));
+    out.write((const char*)&n, sizeof(n));
+    out.write((const char*)kmers.data(), n * sizeof(T));
+    out.write((const char*)freqcnt_lg.data(), n * sizeof(double));
+    out.write((const char*)&m, sizeof(m));
+    for(typename unordered_set<string>::iterator iter = trainedGenomes.begin();
+      iter != trainedGenomes.end(); iter++){
+        out<<*iter<<"\n";
+      }
+    out.close();
+    if(out.fail()){
+      remove(tmp_path);
+      savefileError(destination_path, "write failed (disk full?)");
+    }
+  }
+  boost::system::error_code ec;
+  rename(tmp_path, destination_path, ec);
+  if(ec){
+    savefileError(destination_path, "could not replace savefile: " + ec.message());
+  }
+}
+
+template <class T>
+void Class<T>::save(){
+  save(savefile);
+}
+
+template <class T>
+void Class<T>::load(){
+  load(savefile);
+}
+
+template <class T>
+void Class<T>::unload(){
+  vector<T>().swap(kmers);
+  vector<double>().swap(freqcnt_lg);
+  vector<pair<T, int> >().swap(pending);
+  trainedGenomes.clear();
+
+  isLoaded = false;
+}
+
+template <class T>
+bool Class<T>::loaded(){
+  return isLoaded;
 }

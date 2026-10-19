@@ -88,6 +88,13 @@ bool NB::addClassToUpdateQueue(Class<kmer_t>* cl){
   return true;
 }
 
+void NB::queueAllClassesForUpdate(){
+  for(unordered_map<string, Class<kmer_t>* >::iterator iter = classes.begin();
+    iter != classes.end(); iter++){
+      addClassToUpdateQueue(iter->second);
+    }
+}
+
 void NB::processClassUpdates(){
   progress = 1;
   total = classesToProcess.size();
@@ -145,7 +152,9 @@ void NB::trainThreadController(){
   }
 }
 
-void NB::classifyThreadController(vector<Genome*>& reads){
+void NB::classifyThreadController(vector<Genome*>& reads,
+                                  const vector<kmer_t>& batch_kmers){
+  vector<double> batch_lg;
   bool exitCondition = false;
   while(!exitCondition){
     classQueueAccess.lock();
@@ -166,8 +175,28 @@ void NB::classifyThreadController(vector<Genome*>& reads){
     classQueueAccess.unlock();
 
     cl->load();
-    cl->computeBatchNumerators(reads);
+    // One pass over the class's sorted k-mers serves every read in the batch.
+    cl->lookupFreqCounts_lg(batch_kmers, batch_lg);
+    for(vector<Genome*>::iterator iter = reads.begin();
+      iter != reads.end(); iter++){
+        (*iter)->scoreClass(cl, batch_lg);
+      }
     cl->unload();
+  }
+}
+
+void NB::forEachRead(vector<Genome*>& reads, function<void(Genome*)> fn){
+  int c_nthreads = std::max(1, std::min((int)reads.size(), nthreads));
+  vector<thread> workers;
+  for(int t = 0; t < c_nthreads; t++){
+    workers.emplace_back([&reads, &fn, t, c_nthreads](){
+      for(size_t i = t; i < reads.size(); i += c_nthreads){
+        fn(reads[i]);
+      }
+    });
+  }
+  for(size_t t = 0; t < workers.size(); t++){
+    workers[t].join();
   }
 }
 
@@ -181,6 +210,23 @@ void NB::classify(vector<Genome*> reads){
     cout.flush();
   }
 
+  // Load every read once, then list the batch's distinct k-mers (sorted) and
+  // point each read's k-mers into that list.
+  forEachRead(reads, [](Genome* g){ g->getKmerCounts(); });
+  vector<kmer_t> batch_kmers;
+  for(vector<Genome*>::iterator iter = reads.begin();
+    iter != reads.end(); iter++){
+      unordered_map<kmer_t, int>& counts = (*iter)->getKmerCounts();
+      for(unordered_map<kmer_t, int>::iterator k = counts.begin();
+        k != counts.end(); k++){
+          batch_kmers.push_back(k->first);
+        }
+    }
+  sort(batch_kmers.begin(), batch_kmers.end());
+  batch_kmers.erase(unique(batch_kmers.begin(), batch_kmers.end()),
+                    batch_kmers.end());
+  forEachRead(reads, [&batch_kmers](Genome* g){ g->indexKmers(batch_kmers); });
+
   for(unordered_map<string, Class<kmer_t>* >::iterator iter = classes.begin();
     iter != classes.end(); iter++){
       Class<kmer_t> *cl = iter->second;
@@ -193,7 +239,8 @@ void NB::classify(vector<Genome*> reads){
   }
   vector<thread*> workers(c_nthreads);
   for(int i=0; i < c_nthreads; i++){
-    workers[i] = new thread(&NB::classifyThreadController, this, ref(reads));
+    workers[i] = new thread(&NB::classifyThreadController, this, ref(reads),
+                            cref(batch_kmers));
   }
   for(int i=0; i < c_nthreads; i++){
     workers[i]->join();

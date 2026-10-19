@@ -88,7 +88,11 @@ Savefiles start with a header recording the format version, k-mer size and count
 - Savefiles are written to a temporary file and renamed into place, and any read or write error stops the program, so an interrupted run never leaves a truncated savefile.
 - In classify mode the savedir must already exist and hold at least one class.
 
-Savefiles written by older versions (no header) still load, with a warning, and are upgraded the next time their class is trained.
+Savefiles are binary (format 3): a one-line text header, then each class's k-mers in sorted order with their log counts, then the trained genome names. Binary fields use the machine's byte order. Savefiles from older versions (text formats 1 and 2) still load, and are rewritten in the current format the next time their class is trained. To upgrade a whole savedir at once:
+
+```
+./NB.run convert [save dir] -k [kmer size] -t [threads]
+```
 
 The default value is "./NB_save", which will direct the program to search for a folder named NB_save in its current directory.
 

@@ -8,6 +8,9 @@
 
 #include "Genome.hpp"
 #include <stdexcept>
+#include <algorithm>
+#include <cctype>
+#include <iterator>
 
 bool Genome::STORE_ALL_NUMERATORS = false;
 unsigned int Genome::KMER_SIZE = 0;
@@ -50,6 +53,58 @@ void Genome::loadSequence(){
   sequenceLoaded = true;
 }
 
+template <class F>
+void Genome::parseKmrFile(F add){
+  // Reads the whole file and parses "<k-mer> <count>" pairs by hand; the
+  // stream extraction it replaces dominated training time.
+  std::ifstream in(kmr_path.native(), ios::binary);
+  if(!in.good()){
+    cerr<<"[ERROR] Cannot read k-mer file "<<kmr_path.native()<<"\n";
+    exit(1);
+  }
+  string buf((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
+  const char *p = buf.data(), *end = p + buf.size();
+  while(true){
+    while(p < end && isspace((unsigned char)*p)) p++;
+    if(p == end) break;
+    const char *kmer_start = p;
+    while(p < end && !isspace((unsigned char)*p)) p++;
+    size_t len = p - kmer_start;
+    while(p < end && isspace((unsigned char)*p)) p++;
+    if(p == end || !isdigit((unsigned char)*p)){
+      cerr<<"[ERROR] Malformed k-mer count in "<<kmr_path.native()<<"\n";
+      exit(1);
+    }
+    long long count = 0;
+    while(p < end && isdigit((unsigned char)*p)){
+      count = count * 10 + (*p - '0');
+      p++;
+    }
+    if(len > 32 || (KMER_SIZE != 0 && len != KMER_SIZE)){
+      cerr<<"[ERROR] k-mer \""<<string(kmer_start, len)<<"\" in "
+          <<kmr_path.native()<<" does not match the k-mer size ("<<KMER_SIZE
+          <<", max 32).\n";
+      exit(1);
+    }
+    kmer_t kmer = 0;
+    bool valid = true;
+    for(size_t i = 0; valid && i < len; i++){
+      kmer<<=2;
+      switch(kmer_start[i]){
+        case 'A': case 'a': break;
+        case 'C': case 'c': kmer+=1; break;
+        case 'G': case 'g': kmer+=2; break;
+        case 'T': case 't': kmer+=3; break;
+        // Ambiguous bases (N, IUPAC codes) carry no k-mer identity; skip.
+        default: valid = false;
+      }
+    }
+    if(valid){
+      add(kmer, (int)count);
+    }
+  }
+}
+
 void Genome::loadKmerCounts(){
   /*
    * Several classifier threads can ask for the same read at once. Re-check the
@@ -61,49 +116,40 @@ void Genome::loadKmerCounts(){
     return;
   }
 
-  std::ifstream in(kmr_path.native());
-
   kmer_counts = new unordered_map<kmer_t, int>;
+  parseKmrFile([this](kmer_t kmer, int count){ (*kmer_counts)[kmer] += count; });
+  kmersLoaded = true;
+}
 
-  kmer_t kmer; int kmer_count; string kmer_s;
-  while(in>>kmer_s>>kmer_count){
-    if(kmer_s.size() > 32 || (KMER_SIZE != 0 && kmer_s.size() != KMER_SIZE)){
-      cerr<<"[ERROR] k-mer \""<<kmer_s<<"\" in "<<kmr_path.native()
-          <<" does not match the k-mer size ("<<KMER_SIZE<<", max 32).\n";
-      exit(1);
-    }
-    kmer = 0;
-    bool valid = true;
-    for(string::iterator it = kmer_s.begin(); valid && it != kmer_s.end(); it++){
-      kmer<<=2;
-      switch(*it){
-        case 'A':
-        case 'a':
-          kmer+=0;
-          break;
-        case 'C':
-        case 'c':
-          kmer+=1;
-          break;
-        case 'G':
-        case 'g':
-          kmer+=2;
-          break;
-        case 'T':
-        case 't':
-          kmer+=3;
-          break;
-        default:
-          // Ambiguous bases (N, IUPAC codes) carry no k-mer identity; skip.
-          valid = false;
-      }
-    }
-    if(valid){
-      (*kmer_counts)[kmer]+=kmer_count;
+void Genome::loadSortedKmerCounts(vector<pair<kmer_t, int> >& out){
+  out.clear();
+  parseKmrFile([&out](kmer_t kmer, int count){ out.push_back(make_pair(kmer, count)); });
+  sort(out.begin(), out.end());
+  // Combine repeats (jellyfish output has none, but hand-made files might).
+  size_t w = 0;
+  for(size_t r = 0; r < out.size(); r++){
+    if(w > 0 && out[w-1].first == out[r].first){
+      out[w-1].second += out[r].second;
+    }else{
+      out[w++] = out[r];
     }
   }
-  in.close();
-  kmersLoaded = true;
+  out.resize(w);
+}
+
+void Genome::indexKmers(const vector<kmer_t>& batch_kmers){
+  unordered_map<kmer_t, int>& counts = getKmerCounts();
+  batch_index.clear();
+  batch_count.clear();
+  batch_index.reserve(counts.size());
+  batch_count.reserve(counts.size());
+  for(unordered_map<kmer_t, int>::iterator freq = counts.begin();
+    freq != counts.end(); freq++){
+      batch_index.push_back(lower_bound(batch_kmers.begin(), batch_kmers.end(),
+                                        freq->first) - batch_kmers.begin());
+      batch_count.push_back(freq->second);
+    }
+  unload();
 }
 
 void Genome::unload(){
@@ -129,9 +175,9 @@ string& Genome::getSequence(){
   return *sequence;
 }
 
-void Genome::computeClassificationNumerator(Class<kmer_t>* cl){
+void Genome::scoreClass(Class<kmer_t>* cl, const vector<double>& batch_lg){
   accumulator_set<double, features<tag::sum_kahan> > current, sumfrq;
-  
+
   if(USE_PRIOR){
     current(cl->getNGenomes_lg());
   }
@@ -140,13 +186,14 @@ void Genome::computeClassificationNumerator(Class<kmer_t>* cl){
     strs<<"("<<cl->getId()<<"): "<<sum_kahan(current);
   }
 
-  unordered_map<kmer_t, int>& counts = getKmerCounts();
-  for(unordered_map<kmer_t, int>::iterator freq = counts.begin();
-    freq != counts.end(); freq++){
-      sumfrq(freq->second);
-      current(freq->second * cl->getFreqCount_lg(freq->first));
+  // Same terms in the same order as the original per-k-mer lookups, so the
+  // Kahan sums (and predictions) are bit-identical.
+  for(size_t i = 0; i < batch_index.size(); i++){
+      double lg = batch_lg[batch_index[i]];
+      sumfrq(batch_count[i]);
+      current(batch_count[i] * lg);
       if(NB::debug_flag == NB::Debug::LOG_ALL){
-        strs<<" + "<<freq->second<<" * "<<cl->getFreqCount_lg(freq->first);
+        strs<<" + "<<batch_count[i]<<" * "<<lg;
       }
   }
   current(-sum_kahan(sumfrq) * cl->getSumFreq_lg());

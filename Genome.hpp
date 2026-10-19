@@ -81,13 +81,27 @@ public:
   long long int computeAlignmentScore(Genome* seq);
 
   /**
-   * Takes in a Class instance, and returns the prior numerator; a score
-   * correlated to the probability of the genome instance pertaining to the
-   * supplied class.
-   * @param  class Instance of Class object to use for the computation.
-   * @return       Score correlated to probability of class membership.
+   * Maps this read's k-mers to positions in a batch-wide sorted k-mer list,
+   * keeping the order in which scoring visits them, and frees the k-mer map.
+   * Must be called (once, single-threaded) before scoreClass().
+   * @param batch_kmers Sorted, unique k-mers of every read in the batch.
    */
-  void computeClassificationNumerator(Class<kmer_t>* cls);
+  void indexKmers(const vector<kmer_t>& batch_kmers);
+
+  /**
+   * Scores this read against a class, given the class's log counts for the
+   * batch k-mer list passed to indexKmers(). Thread-safe.
+   * @param cls      The class being scored.
+   * @param batch_lg batch_lg[i] is the class's log count of batch k-mer i.
+   */
+  void scoreClass(Class<kmer_t>* cls, const vector<double>& batch_lg);
+
+  /**
+   * Reads this genome's k-mer counts into a vector sorted by k-mer, without
+   * keeping them in the Genome.
+   * @param out Receives (k-mer, count) pairs, sorted and unique.
+   */
+  void loadSortedKmerCounts(vector<pair<kmer_t, int> >& out);
 
   /**
    * Gets the character located at position "pos" in the DNA sequence.
@@ -153,6 +167,16 @@ protected:
   path sequence_path, kmr_path;
   string *sequence;
   unordered_map<kmer_t, int> *kmer_counts;
+
+  // Set by indexKmers(): each k-mer's position in the batch list and its
+  // count, in the order the k-mer map iterates (so sums match exactly).
+  vector<uint32_t> batch_index;
+  vector<int> batch_count;
+
+  // Parses a jellyfish "dump -c" file, calling add(kmer, count) for each
+  // valid k-mer.
+  template <class F>
+  void parseKmrFile(F add);
   long long int max(long long int a,
                     long long int b,
                     long long int c,
